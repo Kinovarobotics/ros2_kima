@@ -117,16 +117,16 @@ If the bug fix you need isn't in a released version or If you want to build this
 
 2. Create a new ROS2 workspace:
    ```
-   export COLCON_WS=~/workspace/ros2_kortex_ws
+   export COLCON_WS=~/workspace/ros2_linkm_ws
    mkdir -p $COLCON_WS/src
    ```
 
 3. Pull relevant packages:
    ```
    cd $COLCON_WS
-   git clone -b humble --single-branch https://github.com/Kinovarobotics/ros2_kortex.git src/ros2_kortex
-   vcs import src --skip-existing --input src/ros2_kortex/ros2_kortex.$ROS_DISTRO.repos
-   vcs import src --skip-existing --input src/ros2_kortex/ros2_kortex-not-released.$ROS_DISTRO.repos
+   git clone https://github.com/Kinovarobotics/ros2_LinkM.git src/ros2_linkm
+   vcs import src --skip-existing --input src/ros2_linkm/ros2_kortex.$ROS_DISTRO.repos
+   vcs import src --skip-existing --input src/ros2_linkm/ros2_kortex-not-released.$ROS_DISTRO.repos
    ```
 
    If you plan on simulating the robot with ignition or gazebo, first install the simulator using the following commands:
@@ -138,19 +138,19 @@ If the bug fix you need isn't in a released version or If you want to build this
   ```
   Then make sure to pull the additional simulation packages. If you're on ROS2 Humble, run:
    ```
-   vcs import src --skip-existing --input src/ros2_kortex/simulation.humble.repos
+   vcs import src --skip-existing --input src/ros2_linkm/simulation.humble.repos
    ```
 
    otherwise
    ```
-   vcs import --skip-existing --input src/ros2_kortex/simulation.repos
+   vcs import --skip-existing --input src/ros2_linkm/simulation.repos
    ```
 
    If you plan on using MoveIt, you must make sure that you have it already [installed](https://moveit.ros.org/install-moveit2/binary/) either from binaries or by building it from source.
 
    If you plan on simulating the Gen3 7Dof robot mounted on the Husky mobile robot from clearpath, make sure to pull the additional related packages. On ROS2 Humble, run
    ```
-   vcs import src --skip-existing --input src/ros2_kortex/clearpath.repos
+   vcs import src --skip-existing --input src/ros2_linkm/clearpath.repos
    ```
 
 4. Install dependencies, compile, and source the workspace:
@@ -231,8 +231,7 @@ ros2 launch kortex_bringup gen3.launch.py \
 Alternatively, for a physical robot:
 
 ```bash
-ros2 launch kortex_bringup gen3.launch.py \
-  robot_ip:=192.168.1.10
+ros2 launch kortex_bringup gen3.launch.py   robot_ip:=192.168.1.10 use_internal_bus_gripper_comm:=false 
 ```
 You can specify the following arguments if you wish to change your arm configuration:
 

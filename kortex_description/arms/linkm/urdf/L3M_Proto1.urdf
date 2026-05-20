@@ -1,0 +1,621 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- This URDF was automatically created by SolidWorks to URDF Exporter! Originally created by Stephen Brawner (brawner@gmail.com) 
+     Commit Version: 1.6.0-4-g7f85cfe  Build Version: 1.6.7995.38578
+     For more information, please see http://wiki.ros.org/sw_urdf_exporter -->
+<robot
+  name="L3M" version="1.0">
+  <link
+    name="base_link">
+    <inertial>
+      <origin
+        xyz="0.00015337 -0.00022081 0.07669842"
+        rpy="0 0 0" />
+      <mass
+        value="2.06170366" />
+      <inertia
+        ixx="0.00511449"
+        ixy="-1E-06"
+        ixz="3.25E-06"
+        iyy="0.00513579"
+        iyz="2.518E-05"
+        izz="0.00290779" />
+    </inertial>
+    <visual>
+      <origin
+        xyz="0 0 0"
+        rpy="0 0 0" />
+      <geometry>
+        <mesh
+          filename="package://L3M/meshes/base_link.STL" />
+      </geometry>
+      <material
+        name="">
+        <color
+          rgba="0.79216 0.81961 0.93333 1" />
+      </material>
+    </visual>
+    <collision
+      name="s0">
+      <origin xyz="0.0 0.0 0.04" rpy="0 0 0" />
+      <geometry>
+        <sphere radius="0.075" />
+      </geometry>
+    </collision>
+    <collision
+      name="s1">
+      <origin xyz="0.0 0.0 0.08" rpy="0 0 0" />
+      <geometry>
+        <sphere radius="0.075" />
+      </geometry>
+    </collision>
+    <collision
+      name="s2">
+      <origin xyz="0.0 0.0 0.13" rpy="0 0 0" />
+      <geometry>
+        <sphere radius="0.075" />
+      </geometry>
+    </collision>
+  </link>
+  <link
+    name="link_J1-J2">
+    <inertial>
+      <origin
+        xyz="0.00011084 -0.00708926 0.1043245"
+        rpy="0 0 0" />
+      <mass
+        value="2.27318682" />
+      <inertia
+        ixx="0.00958641"
+        ixy="-1.02E-06"
+        ixz="9.85E-06"
+        iyy="0.00938072"
+        iyz="-0.00057588"
+        izz="0.00344789" />
+    </inertial>
+    <visual>
+      <origin
+        xyz="0 0 0"
+        rpy="0 0 0" />
+      <geometry>
+        <mesh
+          filename="package://L3M/meshes/link_J1-J2.STL" />
+      </geometry>
+      <material
+        name="">
+        <color
+          rgba="0.79216 0.81961 0.93333 1" />
+      </material>
+    </visual>
+    <collision
+      name="s0">
+      <origin xyz="0.0 -0.005 0.05" rpy="0 0 0" />
+      <geometry>
+        <sphere radius="0.075" />
+      </geometry>
+    </collision>
+    <collision
+      name="s1">
+      <origin xyz="0.0 -0.02 0.09" rpy="0 0 0" />
+      <geometry>
+        <sphere radius="0.075" />
+      </geometry>
+    </collision>
+    <collision
+      name="s2">
+      <origin xyz="0.0 -0.03 0.15" rpy="0 0 0" />
+      <geometry>
+        <sphere radius="0.075" />
+      </geometry>
+    </collision>
+  </link>
+  <joint
+    name="joint_1"
+    type="revolute">
+    <origin
+      xyz="0 0 0.11"
+      rpy="0 0 0" />
+    <parent
+      link="base_link" />
+    <child
+      link="link_J1-J2" />
+    <axis
+      xyz="0 0 1" />
+    <limit
+      lower="-6.284"
+      upper="6.284"
+      effort="107"
+      velocity="3.142" />
+  </joint>
+  <link
+    name="link_J2-J3">
+    <inertial>
+      <origin
+        xyz="3.09E-05 -0.10589631 0.01372831"
+        rpy="0 0 0" />
+      <mass
+        value="2.00654949" />
+      <inertia
+        ixx="0.0180855"
+        ixy="-1.095E-05"
+        ixz="-1.65E-06"
+        iyy="0.0028588"
+        iyz="0.00272402"
+        izz="0.01799154" />
+    </inertial>
+    <visual>
+      <origin
+        xyz="0 0 0"
+        rpy="0 0 0" />
+      <geometry>
+        <mesh
+          filename="package://L3M/meshes/link_J2-J3.STL" />
+      </geometry>
+      <material
+        name="">
+        <color
+          rgba="0.79216 0.81961 0.93333 1" />
+      </material>
+    </visual>
+    <collision
+      name="s0">
+      <origin xyz="0.0 0.01 0.03" rpy="0 0 0" />
+      <geometry>
+        <sphere radius="0.07" />
+      </geometry>
+    </collision>
+    <collision
+      name="s1">
+      <origin xyz="0.0 -0.04 0.02" rpy="0 0 0" />
+      <geometry>
+        <sphere radius="0.07" />
+      </geometry>
+    </collision>
+    <collision
+      name="s2">
+      <origin xyz="0.0 -0.08 0.01" rpy="0 0 0" />
+      <geometry>
+        <sphere radius="0.07" />
+      </geometry>
+    </collision>
+    <collision
+      name="s3">
+      <origin xyz="0.0 -0.12 0.0" rpy="0 0 0" />
+      <geometry>
+        <sphere radius="0.07" />
+      </geometry>
+    </collision>
+      <collision
+      name="s4">
+      <origin xyz="0.0 -0.16 0.0" rpy="0 0 0" />
+      <geometry>
+        <sphere radius="0.07" />
+      </geometry>
+    </collision>
+  </link>
+  <joint
+    name="joint_2"
+    type="revolute">
+    <origin
+      xyz="0 0 0.145"
+      rpy="-1.5708 0 0" />
+    <parent
+      link="link_J1-J2" />
+    <child
+      link="link_J2-J3" />
+    <axis
+      xyz="0 0 1" />
+    <limit
+      lower="-1.9887"
+      upper="1.9887"
+      effort="107"
+      velocity="3.142" />
+  </joint>
+  <link
+    name="link_J3-J4">
+    <inertial>
+      <origin
+        xyz="5.03E-05 -0.00848511 0.13382916"
+        rpy="0 0 0" />
+      <mass
+        value="1.76260891" />
+      <inertia
+        ixx="0.01223079"
+        ixy="2.8E-07"
+        ixz="5.52E-06"
+        iyy="0.01190478"
+        iyz="-0.00060176"
+        izz="0.00233244" />
+    </inertial>
+    <visual>
+      <origin
+        xyz="0 0 0"
+        rpy="0 0 0" />
+      <geometry>
+        <mesh
+          filename="package://L3M/meshes/link_J3-J4.STL" />
+      </geometry>
+      <material
+        name="">
+        <color
+          rgba="0.79216 0.81961 0.93333 1" />
+      </material>
+    </visual>
+    <collision
+      name="s0">
+      <origin xyz="0.0 0.0 0.04" rpy="0 0 0" />
+      <geometry>
+        <sphere radius="0.07" />
+      </geometry>
+    </collision>
+    <collision
+      name="s1">
+      <origin xyz="0.0 -0.01 0.07" rpy="0 0 0" />
+      <geometry>
+        <sphere radius="0.07" />
+      </geometry>
+    </collision>
+    <collision
+      name="s2">
+      <origin xyz="0.0 -0.02 0.11" rpy="0 0 0" />
+      <geometry>
+        <sphere radius="0.07" />
+      </geometry>
+    </collision>
+    <collision
+      name="s3">
+      <origin xyz="0.0 -0.025 0.15" rpy="0 0 0" />
+      <geometry>
+        <sphere radius="0.07" />
+      </geometry>
+    </collision>
+    <collision
+      name="s4">
+      <origin xyz="0.0 -0.03 0.2" rpy="0 0 0" />
+      <geometry>
+        <sphere radius="0.07" />
+      </geometry>
+    </collision>
+  </link>
+  <joint
+    name="joint_3"
+    type="revolute">
+    <origin
+      xyz="0 -0.195 0"
+      rpy="1.5708 0 0" />
+    <parent
+      link="link_J2-J3" />
+    <child
+      link="link_J3-J4" />
+    <axis
+      xyz="0 0 1" />
+    <limit
+      lower="-6.284"
+      upper="6.284"
+      effort="70"
+      velocity="4.712" />
+  </joint>
+  <link
+    name="link_J4-J5">
+    <inertial>
+      <origin
+        xyz="-1.751E-05 -0.13040912 0.01582329"
+        rpy="0 0 0" />
+      <mass
+        value="1.50663764" />
+      <inertia
+        ixx="0.02112524"
+        ixy="3.68E-06"
+        ixz="7.7E-07"
+        iyy="0.0018132"
+        iyz="0.00269567"
+        izz="0.02090559" />
+    </inertial>
+    <visual>
+      <origin
+        xyz="0 0 0"
+        rpy="0 0 0" />
+      <geometry>
+        <mesh
+          filename="package://L3M/meshes/link_J4-J5.STL" />
+      </geometry>
+      <material
+        name="">
+        <color
+          rgba="0.79216 0.81961 0.93333 1" />
+      </material>
+    </visual>
+    <collision
+      name="s0">
+      <origin xyz="0.0 0.01 0.03" rpy="0 0 0" />
+      <geometry>
+        <sphere radius="0.065" />
+      </geometry>
+    </collision>
+    <collision
+      name="s1">
+      <origin xyz="0.0 -0.05 0.025" rpy="0 0 0" />
+      <geometry>
+        <sphere radius="0.06" />
+      </geometry>
+    </collision>
+    <collision
+      name="s2">
+      <origin xyz="0.0 -0.1 0.02" rpy="0 0 0" />
+      <geometry>
+        <sphere radius="0.06" />
+      </geometry>
+    </collision>
+    <collision
+      name="s3">
+      <origin xyz="0.0 -0.14 0.01" rpy="0 0 0" />
+      <geometry>
+        <sphere radius="0.06" />
+      </geometry>
+    </collision>
+    <collision
+      name="s4">
+      <origin xyz="0.0 -0.18 0.0" rpy="0 0 0" />
+      <geometry>
+        <sphere radius="0.06" />
+      </geometry>
+    </collision>
+    <collision
+      name="s5">
+      <origin xyz="0.0 -0.22 0.0" rpy="0 0 0" />
+      <geometry>
+        <sphere radius="0.06" />
+      </geometry>
+    </collision>
+  </link>
+  <joint
+    name="joint_4"
+    type="revolute">
+    <origin
+      xyz="0 0 0.195"
+      rpy="-1.5708 0 0" />
+    <parent
+      link="link_J3-J4" />
+    <child
+      link="link_J4-J5" />
+    <axis
+      xyz="0 0 1" />
+    <limit
+      lower="-2.4248"
+      upper="2.4248"
+      effort="70"
+      velocity="4.712" />
+  </joint>
+  <link
+    name="link_J5-J6">
+    <inertial>
+      <origin
+        xyz="1.244E-05 -0.00550579 0.07732853"
+        rpy="0 0 0" />
+      <mass
+        value="1.00220259" />
+      <inertia
+        ixx="0.00228062"
+        ixy="1.49E-06"
+        ixz="-6.7E-07"
+        iyy="0.00210517"
+        iyz="-0.0001394"
+        izz="0.00091029" />
+    </inertial>
+    <visual>
+      <origin
+        xyz="0 0 0"
+        rpy="0 0 0" />
+      <geometry>
+        <mesh
+          filename="package://L3M/meshes/link_J5-J6.STL" />
+      </geometry>
+      <material
+        name="">
+        <color
+          rgba="0.79216 0.81961 0.93333 1" />
+      </material>
+    </visual>
+    <collision
+      name="s0">
+      <origin xyz="0.0 0.00 0.03" rpy="0 0 0" />
+      <geometry>
+        <sphere radius="0.06" />
+      </geometry>
+    </collision>
+    <collision
+      name="s1">
+      <origin xyz="0.0 -0.015 0.06" rpy="0 0 0" />
+      <geometry>
+        <sphere radius="0.06" />
+      </geometry>
+    </collision>
+    <collision
+      name="s2">
+      <origin xyz="0.0 -0.025 0.1" rpy="0 0 0" />
+      <geometry>
+        <sphere radius="0.06" />
+      </geometry>
+    </collision>
+  </link>
+  <joint
+    name="joint_5"
+    type="revolute">
+    <origin
+      xyz="0 -0.255 0"
+      rpy="1.5708 0 0" />
+    <parent
+      link="link_J4-J5" />
+    <child
+      link="link_J5-J6" />
+    <axis
+      xyz="0 0 1" />
+    <limit
+      lower="-6.284"
+      upper="6.284"
+      effort="36"
+      velocity="6.284" />
+  </joint>
+  <link
+    name="link_J6-J7">
+    <inertial>
+      <origin
+        xyz="0 -0.06442439 0.01002949"
+        rpy="0 0 0" />
+      <mass
+        value="1.00220259" />
+      <inertia
+        ixx="0.00316497"
+        ixy="-3.08E-06"
+        ixz="-7.4E-07"
+        iyy="0.00089527"
+        iyz="0.00063875"
+        izz="0.00300454" />
+    </inertial>
+    <visual>
+      <origin
+        xyz="0 0 0"
+        rpy="0 0 0" />
+      <geometry>
+        <mesh
+          filename="package://L3M/meshes/link_J6-J7.STL" />
+      </geometry>
+      <material
+        name="">
+        <color
+          rgba="0.79216 0.81961 0.93333 1" />
+      </material>
+    </visual>
+    <collision
+      name="s0">
+      <origin xyz="0.0 0.0 0.025" rpy="0 0 0" />
+      <geometry>
+        <sphere radius="0.06" />
+      </geometry>
+    </collision>
+    <collision
+      name="s1">
+      <origin xyz="0.0 -0.04 0.01" rpy="0 0 0" />
+      <geometry>
+        <sphere radius="0.06" />
+      </geometry>
+    </collision>
+    <collision
+      name="s2">
+      <origin xyz="0.0 -0.08 0.0" rpy="0 0 0" />
+      <geometry>
+        <sphere radius="0.06" />
+      </geometry>
+    </collision>
+  </link>
+  <joint
+    name="joint_6"
+    type="revolute">
+    <origin
+      xyz="0 0 0.105"
+      rpy="-1.5708 0 0" />
+    <parent
+      link="link_J5-J6" />
+    <child
+      link="link_J6-J7" />
+    <axis
+      xyz="0 0 1" />
+    <limit
+      lower="-1.8317"
+      upper="1.8317"
+      effort="36"
+      velocity="6.284" />
+  </joint>
+  <link
+    name="link_J7-TIF">
+    <inertial>
+      <origin
+        xyz="-5.763E-05 4.382E-05 0.04822273"
+        rpy="0 0 0" />
+      <mass
+        value="0.58506179" />
+      <inertia
+        ixx="0.00074281"
+        ixy="0.00000013"
+        ixz="-0.00000103"
+        iyy="0.00074032"
+        iyz="0.00000016"
+        izz="0.00052184" />
+    </inertial>
+    <visual>
+      <origin
+        xyz="0 0 0"
+        rpy="0 0 0" />
+      <geometry>
+        <mesh
+          filename="package://L3M/meshes/link_J7-TIF.STL" />
+      </geometry>
+      <material
+        name="">
+        <color
+          rgba="0.79216 0.81961 0.93333 1" />
+      </material>
+    </visual>
+    <collision
+      name="s0">
+      <origin xyz="0.0 0.0 0.03" rpy="0 0 0" />
+      <geometry>
+        <sphere radius="0.062" />
+      </geometry>
+    </collision>
+    <collision
+      name="s1">
+      <origin xyz="0.0 0.0 0.055" rpy="0 0 0" />
+      <geometry>
+        <sphere radius="0.062" />
+      </geometry>
+    </collision>
+  </link>
+  <joint
+    name="joint_7"
+    type="revolute">
+    <origin
+      xyz="0 -0.105 0"
+      rpy="1.5708 0 0" />
+    <parent
+      link="link_J6-J7" />
+    <child
+      link="link_J7-TIF" />
+    <axis
+      xyz="0 0 1" />
+    <limit
+      lower="-6.284"
+      upper="6.284"
+      effort="36"
+      velocity="6.284" />
+  </joint>
+  <link
+    name="end_effector_link">
+    <inertial>
+      <origin
+        xyz="0 0 0"
+        rpy="0 0 0" />
+      <mass
+        value="0" />
+      <inertia
+        ixx="0"
+        ixy="0"
+        ixz="0"
+        iyy="0"
+        iyz="0"
+        izz="0" />
+    </inertial>
+  </link>
+  <joint
+    name="end_effector_joint"
+    type="fixed">
+    <origin
+      xyz="0 0 0.096"
+      rpy="0 0 0" />
+    <parent
+      link="link_J7-TIF" />
+    <child
+      link="end_effector_link" />
+    <axis
+      xyz="0 0 0" />
+  </joint>
+</robot>

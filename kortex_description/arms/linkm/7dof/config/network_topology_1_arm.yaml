@@ -1,0 +1,80 @@
+# ------------------------------------------------------------------
+# Device definitions (EtherCAT slave configuration)
+# ------------------------------------------------------------------
+defines:
+  act_a01_main:
+    vendor_id: 0x000022CD
+    product_id: 0x00000101
+    revision: 0x00000004
+    rpdo:
+      - index: 0x1605
+        channels:
+          - {index: 0x6040, sub_index: 0, type: uint16}   # Controlword
+          - {index: 0x6060, sub_index: 0, type: int8}     # Modes of operation
+          - {index: 0x607A, sub_index: 0, type: int32}    # Target position
+          - {index: 0x60FF, sub_index: 0, type: int32}    # Target velocity
+          - {index: 0x6071, sub_index: 0, type: int16}    # Target torque
+          - {index: 0x60B1, sub_index: 0, type: int32}    # Velocity offset
+          - {index: 0x60B2, sub_index: 0, type: int16}    # Torque offset
+    tpdo:
+      - index: 0x1A05
+        channels:
+          - {index: 0x6041, sub_index: 0, type: uint16}   # Statusword
+          - {index: 0x6061, sub_index: 0, type: int8}     # Modes of operation display
+          - {index: 0x6064, sub_index: 0, type: int32}    # Position actual value
+          - {index: 0x606C, sub_index: 0, type: int32}    # Velocity actual value
+          - {index: 0x6077, sub_index: 0, type: int16}    # Torque actual value
+      - index: 0x1A06
+        channels:
+          - {index: 0x6041, sub_index: 0, type: uint16}  # Statusword
+          - {index: 0x20A4, sub_index: 0, type: uint32}  # Joint position actual value
+          - {index: 0x20A5, sub_index: 0, type: uint32}  # Joint velocity actual value
+          - {index: 0x20A2, sub_index: 0, type: uint32}  # Joint torque actual value
+          - {index: 0x20A6, sub_index: 0, type: uint32}  # Joint position from motor encoder
+          - {index: 0x20A7, sub_index: 0, type: uint32}  # Joint velocity from motor encoder
+          - {index: 0x20AB, sub_index: 0, type: uint32}  # Motor current
+          - {index: 0x20AC, sub_index: 0, type: uint32}  # Motor temperature
+          - {index: 0x20AD, sub_index: 0, type: uint32}  # Microcontroller core temperature
+          - {index: 0x20AE, sub_index: 1, type: uint32}  # Ambient temperature
+          - {index: 0x20A8, sub_index: 0, type: uint32}  # Joint position from Hall sensors
+          - {index: 0x20A9, sub_index: 0, type: uint32}  # Control voltage
+          - {index: 0x20AA, sub_index: 0, type: uint32}  # Drive voltage
+          - {index: 0x204A, sub_index: 1, type: uint32}  # Fault bank A
+          - {index: 0x204A, sub_index: 2, type: uint32}  # Fault bank B
+          - {index: 0x204A, sub_index: 3, type: uint32}  # Fault bank C
+          - {index: 0x204A, sub_index: 4, type: uint32}  # Fault bank D
+          - {index: 0x204B, sub_index: 1, type: uint32}  # Warning bank A
+    sm:
+      watchdog_timeout_ms: 100 # Sync manager watchdog timeout (ms)
+      managers:
+        - {index: 2, type: output, pdo: rpdo, watchdog: enable}
+        - {index: 3, type: input, pdo: tpdo, watchdog: disable}
+  act_a01_safety:
+    vendor_id: 0x000022CD
+    product_id: 0x00000102
+    revision: 0x00000004
+    rpdo:
+      - index: 0x1600
+        channels:
+          - {index: 0x6040, sub_index: 0, type: uint16}        # Controlword
+          - {index: 0x607A, sub_index: 0, type: uint32}        # Target position
+    tpdo:
+      - index: 0x1A00
+        channels:
+          - {index: 0x6041, sub_index: 0, type: uint16}        # Statusword
+          - {index: 0x6064, sub_index: 0, type: uint32}        # Position actual value
+    sm:
+      watchdog_timeout_ms: 100 # Sync manager watchdog timeout (ms)
+      managers:
+        - {index: 2, type: output, pdo: rpdo, watchdog: enable}
+        - {index: 3, type: input, pdo: tpdo, watchdog: disable}
+
+# ------------------------------------------------------------------
+# EtherCAT network topology
+# ------------------------------------------------------------------
+network:
+  devices:
+    - type: act_a01_main
+      slave_indexes: [0, 2, 4, 6, 8, 10, 12]
+    - type: act_a01_safety
+      slave_indexes: [1, 3, 5, 7, 9, 11, 13]

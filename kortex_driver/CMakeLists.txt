@@ -1,75 +1,82 @@
 cmake_minimum_required(VERSION 3.14)
 project(kortex_driver)
 
-include(FetchContent)
-
-# Select correct Kinova Binary API zip based on platform
-
-if(CMAKE_SYSTEM_NAME STREQUAL "Linux" AND CMAKE_SYSTEM_PROCESSOR STREQUAL "x86_64")
-  set(API_URL "https://artifactory.kinovaapps.com:443/artifactory/generic-public/kortex/API/2.7.0/linux_x86-64_gcc_5.4.zip")
-elseif(CMAKE_SYSTEM_NAME STREQUAL "Linux" AND CMAKE_SYSTEM_PROCESSOR STREQUAL "aarch64")
-  set(API_URL "https://artifactory.kinovaapps.com:443/artifactory/generic-local-public/kortex/API/2.7.0/linux_aarch64_gcc_7.4.zip")
-else()
-  set(API_URL "")
-  message(FATAL_ERROR "Unsupported System: Detected ${CMAKE_SYSTEM_NAME} and ${CMAKE_SYSTEM_PROCESSOR}")
-endif()
-
-FetchContent_Declare(
-  kinova_binary_api
-  URL ${API_URL}
-)
-FetchContent_MakeAvailable(kinova_binary_api)
-
-# Default to C++14
+# RCL requires C++20 and the gcc-13 (new __cxx11) ABI.
 if(NOT CMAKE_CXX_STANDARD)
-  set(CMAKE_CXX_STANDARD 14)
+  set(CMAKE_CXX_STANDARD 20)
 endif()
+set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
 if(CMAKE_COMPILER_IS_GNUCXX OR CMAKE_CXX_COMPILER_ID MATCHES "Clang")
   add_compile_options(-Wall -Wextra)
 endif()
 
-# this is needed by the kortex_api to tell it we are compiling for linux
-add_definitions(-D_OS_UNIX=1)
+# --- Kinova Robot Control Library (RCL) SDK ---------------------------------
+# Not a ROS package. Point KINOVA_RCL_ROOT at the extracted SDK release
+# directory, or override with -DKINOVA_RCL_ROOT=...
+set(KINOVA_RCL_ROOT
+  "/home/aalmrad/Documents/KIMA/RCL/robot_control_library_linux_x86_gcc13_release_0.1.0-dev.126"
+  CACHE PATH "Path to the extracted Kinova RCL SDK (contains include/ and lib/).")
+
+# IMPORTANT: link the STATIC archive (librcl.a), not librcl.so. Kinova's shared
+# library has the SONAME `librcl.so`, which is identical to ROS 2's own `rcl`
+# library — the dynamic loader would resolve our `librcl.so` NEEDED entry to
+# ROS's librcl.so and leave every Kinova rcl::api symbol undefined. Statically
+# linking the archive folds the Kinova code into this plugin and removes the
+# runtime dependency (and the name clash) altogether.
+set(RCL_LIBRARY "${KINOVA_RCL_ROOT}/lib/librcl.a")
+if(NOT EXISTS "${RCL_LIBRARY}")
+  message(FATAL_ERROR
+    "librcl.a not found at ${RCL_LIBRARY}. Set -DKINOVA_RCL_ROOT to the RCL SDK path.")
+endif()
+
+# Imported handle for librcl.a. NOTE: deliberately NO INTERFACE_INCLUDE_DIRECTORIES
+# — Kinova's <rcl/rcl.h> collides with ROS 2's rcl, so the SDK include dir must
+# never leak onto a target that also pulls in rclcpp.
+add_library(rcl_sdk STATIC IMPORTED)
+set_target_properties(rcl_sdk PROPERTIES IMPORTED_LOCATION "${RCL_LIBRARY}")
 
 # find dependencies
 find_package(ament_cmake REQUIRED)
 find_package(hardware_interface REQUIRED)
 find_package(pluginlib REQUIRED)
 find_package(rclcpp REQUIRED)
-find_package(kortex_api REQUIRED)
 
-# CMake does not allow IMPORTED libraries to be installed
-# The package kortex_api will download and setup the include directories
-add_library(KortexApiCpp STATIC IMPORTED)
-set_target_properties(KortexApiCpp PROPERTIES
-  IMPORTED_LOCATION ${kinova_binary_api_SOURCE_DIR}/lib/release/libKortexApiCpp.a
-  INTERFACE_LINK_LIBRARIES KortexApiCpp
+# --- ROS-free RCL wrapper ---------------------------------------------------
+# Compiled in isolation: this is the only target that sees the Kinova RCL
+# include directory, and it deliberately does NOT depend on rclcpp/hardware_interface,
+# so ROS 2's rcl headers never share a translation unit with Kinova's.
+add_library(kortex_rcl_driver STATIC
+  src/rcl_robot_driver.cpp
 )
-target_link_libraries(KortexApiCpp INTERFACE pthread)
-add_dependencies(KortexApiCpp kortex_api)
+target_include_directories(kortex_rcl_driver
+  PRIVATE
+    include
+    "${KINOVA_RCL_ROOT}/include"
+)
+# PUBLIC so librcl.so propagates to the plugin for linking; rcl_sdk exposes no
+# include dirs, so nothing leaks.
+target_link_libraries(kortex_rcl_driver PUBLIC rcl_sdk ${CMAKE_DL_LIBS} pthread)
+set_target_properties(kortex_rcl_driver PROPERTIES POSITION_INDEPENDENT_CODE ON)
 
-## COMPILE
-add_library(
-  ${PROJECT_NAME}
-  SHARED
+# --- ros2_control hardware plugin -------------------------------------------
+add_library(${PROJECT_NAME} SHARED
   src/hardware_interface.cpp
   src/kortex_math_util.cpp
 )
-target_link_libraries(${PROJECT_NAME} KortexApiCpp)
-target_include_directories(
-  ${PROJECT_NAME}
+target_include_directories(${PROJECT_NAME}
   PRIVATE
-  include
+    include
 )
-# kortex_api is the headers for the Kortex API
+target_link_libraries(${PROJECT_NAME} kortex_rcl_driver)
 ament_target_dependencies(
   ${PROJECT_NAME}
-  SYSTEM kortex_api
   hardware_interface
   pluginlib
   rclcpp
 )
+# RCL is statically linked (see above), so there is no librcl.so runtime
+# dependency and no RPATH is needed for it.
 
 pluginlib_export_plugin_description_file(hardware_interface hardware_interface_plugin.xml)
 
@@ -95,7 +102,6 @@ ament_export_libraries(
 )
 ament_export_dependencies(
   hardware_interface
-  kortex_api
   pluginlib
   rclcpp
 )

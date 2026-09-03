@@ -27,16 +27,16 @@ If you want to build this repository from source or contribute back to the repos
 
 2. Create a new ROS2 workspace:
    ```
-   export COLCON_WS=~/workspace/ros2_linkm_ws
+   export COLCON_WS=~/workspace/ros2_kima_ws
    mkdir -p $COLCON_WS/src
    ```
 
 3. Pull relevant packages:
    ```
    cd $COLCON_WS
-   git clone https://github.com/Kinovarobotics/ros2_LinkM.git src/ros2_linkm
-   vcs import src --skip-existing --input src/ros2_linkm/ros2_kortex.$ROS_DISTRO.repos
-   vcs import src --skip-existing --input src/ros2_linkm/ros2_kortex-not-released.$ROS_DISTRO.repos
+   git clone https://github.com/Kinovarobotics/ros2_kima.git src/ros2_kima
+   vcs import src --skip-existing --input src/ros2_kima/ros2_kortex.$ROS_DISTRO.repos
+   vcs import src --skip-existing --input src/ros2_kima/ros2_kortex-not-released.$ROS_DISTRO.repos
    ```
 
 
@@ -59,10 +59,10 @@ If you want to build this repository from source or contribute back to the repos
 
 ### KIMA Robots
 
-The `linkm.launch.py` launch file is designed to be used for KIMA arms. The typical use case to bringup and visualize the KIMA robotic arm with mock hardware on Rviz:
+The `kima.launch.py` launch file is designed to be used for KIMA arms. The typical use case to bringup and visualize the KIMA robotic arm with mock hardware on Rviz:
 
 ```bash
-ros2 launch kortex_bringup linkm.launch.py \
+ros2 launch kortex_bringup kima.launch.py \
   robot_ip:=yyy.yyy.yyy.yyy \
   use_fake_hardware:=true
 ```
@@ -70,11 +70,11 @@ ros2 launch kortex_bringup linkm.launch.py \
 Alternatively, for a physical robot:
 
 ```bash
-ros2 launch kortex_bringup linkm.launch.py robot_ip:=192.168.1.10 
+ros2 launch kortex_bringup kima.launch.py robot_ip:=192.168.1.10 
 ```
 You can specify the following arguments if you wish to change your arm configuration:
 
-* `robot_type`: Your robot model. Default value (and only one) is `linkm`.
+* `robot_type`: Your robot model. Default value (and only one) is `kima`.
 
 * `robot_ip` : IP address by which the robot can be reached. No default is specified, this is a required argument. All arms are shipped with address `192.168.1.10`, but if you have reassigned your physical arm's robot IP address, then you will need to assign that ip address.
 

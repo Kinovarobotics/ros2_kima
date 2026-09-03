@@ -12,9 +12,10 @@
   <buildtool_depend>ament_cmake</buildtool_depend>
 
   <depend>hardware_interface</depend>
-  <depend>kortex_api</depend>
   <depend>pluginlib</depend>
   <depend>rclcpp</depend>
+  <!-- Kinova Robot Control Library (RCL) is an external, non-ROS SDK linked via
+       CMake (see RCL_ROOT in CMakeLists.txt); it has no rosdep key. -->
 
   <export>
     <build_type>ament_cmake</build_type>

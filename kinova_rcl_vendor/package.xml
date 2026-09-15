@@ -1,0 +1,23 @@
+<?xml version="1.0"?>
+<?xml-model href="http://download.ros.org/schema/package_format3.xsd" schematypens="http://www.w3.org/2001/XMLSchema"?>
+<package format="3">
+  <name>kinova_rcl_vendor</name>
+  <version>0.2.3</version>
+  <description>
+    Vendor package for the Kinova Robot Control Library (RCL), a non-ROS binary
+    SDK. Downloads and unpacks the released tarball at build time and exports the
+    static archive as the imported target kinova_rcl::rcl.
+  </description>
+
+  <maintainer email="tbd@todo.invalid">TBD</maintainer>
+
+  <!-- The vendored SDK is covered by the Kinova RCL EULA, installed to
+       share/kinova_rcl_vendor/. This package's own build files are BSD. -->
+  <license>BSD</license>
+
+  <buildtool_depend>ament_cmake</buildtool_depend>
+
+  <export>
+    <build_type>ament_cmake</build_type>
+  </export>
+</package>

@@ -67,7 +67,6 @@ repos:
         language: system
         files: \.(c|cc|cxx|cpp|frag|glsl|h|hpp|hxx|ih|ispc|ipp|java|js|m|proto|vert)$
         args: ['-fallback-style=none', '-i']
-        exclude: kortex_api/
   # The same options as in ament_cppcheck are used, but its not working...
   #- repo: https://github.com/pocc/pre-commit-hooks
     #rev: v1.1.1
@@ -85,7 +84,6 @@ repos:
         entry: env AMENT_CPPCHECK_ALLOW_SLOW_VERSIONS=1 ament_cppcheck
         language: system
         files: \.(h\+\+|h|hh|hxx|hpp|cuh|c|cc|cpp|cu|c\+\+|cxx|tpp|txx)$
-        exclude: 'kortex_api/.*'
 
   # Maybe use https://github.com/cpplint/cpplint instead
   - repo: local
@@ -99,7 +97,7 @@ repos:
         files: \.(h\+\+|h|hh|hxx|hpp|cuh|c|cc|cpp|cu|c\+\+|cxx|tpp|txx)$
         args: ["--linelength=100", "--filter=-whitespace/newline"]
         # https://github.com/cpplint/cpplint/issues/131 kortex_math_util false positive with unamed func parameter
-        exclude: 'kortex_api/.*|kortex_driver/src/kortex_math_util.cpp'
+        exclude: 'kortex_driver/src/kortex_math_util.cpp'
 
   # Cmake hooks
   - repo: local
@@ -111,7 +109,7 @@ repos:
         entry: ament_lint_cmake
         language: system
         files: CMakeLists\.txt$
-        exclude: '(kortex_api|kortex_driver)/.*'
+        exclude: 'kortex_driver/.*'
 
   # Copyright
   - repo: local
@@ -122,7 +120,6 @@ repos:
         stages: [commit]
         entry: ament_copyright
         language: system
-        exclude: kortex_api/
 
   # Docs - RestructuredText hooks
   - repo: https://github.com/PyCQA/doc8
@@ -147,4 +144,4 @@ repos:
     hooks:
       - id: codespell
         args: ['--write-changes']
-        exclude: kortex_api/|CHANGELOG\.rst|\.(svg|pyc|drawio)$
+        exclude: CHANGELOG\.rst|\.(svg|pyc|drawio)$

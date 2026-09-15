@@ -14,8 +14,12 @@
   <depend>hardware_interface</depend>
   <depend>pluginlib</depend>
   <depend>rclcpp</depend>
-  <!-- Kinova Robot Control Library (RCL) is an external, non-ROS SDK linked via
-       CMake (see RCL_ROOT in CMakeLists.txt); it has no rosdep key. -->
+  <depend>ament_index_cpp</depend>
+  <!-- Kinova Robot Control Library (RCL) is an external, non-ROS SDK. It is
+       vendored by kinova_rcl_vendor. The library itself is statically linked,
+       but the package is also needed at run time: its share directory holds the
+       EtherCAT network topology descriptors. -->
+  <depend>kinova_rcl_vendor</depend>
 
   <export>
     <build_type>ament_cmake</build_type>

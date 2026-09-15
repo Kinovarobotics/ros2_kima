@@ -35,6 +35,7 @@
 #include "kortex_driver/hardware_interface.hpp"
 #include "kortex_driver/kortex_math_util.hpp"
 
+#include "ament_index_cpp/get_package_share_directory.hpp"
 #include "hardware_interface/types/hardware_interface_type_values.hpp"
 #include "rclcpp/rclcpp.hpp"
 
@@ -55,6 +56,28 @@ std::string GetParam(
   }
   return it->second;
 }
+
+// Default EtherCAT network topology descriptor. Resolved through the ament index
+// from kinova_rcl_vendor, which installs the descriptors shipped with the RCL
+// SDK, so the default follows the vendored SDK version instead of a path baked
+// in at authoring time. Returns an empty string if the package cannot be found;
+// on_init reports that when it fails to open the file.
+std::string DefaultTopologyFile()
+{
+  try
+  {
+    return ament_index_cpp::get_package_share_directory("kinova_rcl_vendor") +
+           "/network_topology/etherlab/network_topology_1_arm.yaml";
+  }
+  catch (const std::exception & ex)
+  {
+    RCLCPP_WARN(
+      LOGGER, "Could not locate the kinova_rcl_vendor share directory: %s. Set the "
+              "'network_topology_file' hardware parameter explicitly.",
+      ex.what());
+    return {};
+  }
+}
 }  // namespace
 
 namespace kortex_driver
@@ -74,11 +97,7 @@ CallbackReturn KortexMultiInterfaceHardware::on_init(const hardware_interface::H
   // --- EtherCAT / RCL configuration (all defaulted so the interface runs even
   //     before the launch/xacro are updated) ---
   ethercat_lib_path_ = GetParam(p, "ethercat_lib_path", "/usr/local/lib/libethercat.so");
-  topology_file_path_ = GetParam(
-    p, "network_topology_file",
-    "/home/aalmrad/Documents/KIMA/RCL/"
-    "robot_control_library_linux_x86_gcc13_release_0.1.0-dev.126/src/examples/"
-    "network_topology/etherlab/network_topology_1_arm.yaml");
+  topology_file_path_ = GetParam(p, "network_topology_file", DefaultTopologyFile());
 
   expected_arm_.part_number = GetParam(p, "arm_part_number", "ARM-L3M000-001");
   expected_arm_.part_number_revision = GetParam(p, "arm_part_number_revision", "A");

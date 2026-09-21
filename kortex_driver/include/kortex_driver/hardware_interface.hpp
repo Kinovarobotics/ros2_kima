@@ -38,6 +38,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <limits>
 #include <memory>
 #include <string>
 #include <vector>
@@ -121,6 +122,25 @@ private:
   std::vector<double> fb_velocity_deg_;
   std::vector<double> fb_torque_nm_;
   std::vector<double> cmd_position_deg_;
+
+  // --- reset_fault interfaces, driven by picknik_reset_fault_controller ---
+  // The controller writes ISSUE_CMD to reset_fault/command and polls
+  // reset_fault/async_success; we mirror the latched arm fault on
+  // reset_fault/internal_fault. Faults are never cleared automatically.
+  double reset_fault_cmd_{std::numeric_limits<double>::quiet_NaN()};
+  double reset_fault_async_success_{std::numeric_limits<double>::quiet_NaN()};
+  double in_fault_{0.0};
+
+  // Number of consecutive ScanNetwork attempts before giving up in on_configure.
+  static constexpr int kMaxScanAttempts = 3;
+
+  /**
+   * @brief Seed states/commands from current feedback and enter RT joint-position mode.
+   *
+   * Used both at activation and after a fault is cleared, since a faulted arm
+   * activates without ever entering the mode. Returns false on failure.
+   */
+  bool enterRealtimeMode();
 };
 
 }  // namespace kortex_driver

@@ -21,7 +21,7 @@ from launch.actions import (
     RegisterEventHandler,
 )
 from launch.event_handlers import OnProcessExit
-from launch.conditions import IfCondition
+from launch.conditions import IfCondition, UnlessCondition
 from launch.substitutions import (
     Command,
     FindExecutable,
@@ -221,12 +221,13 @@ def launch_setup(context, *args, **kwargs):
         condition=IfCondition(PythonExpression(["'", gripper, "' != ''"])),
     )
 
-    # only start the fault controller if we are using hardware
+    # only start the fault controller if we are using hardware; it exposes
+    # ~/reset_fault, the deliberate way to clear a latched actuator fault
     fault_controller_spawner = Node(
         package="controller_manager",
         executable="spawner",
         arguments=[fault_controller, "-c", controller_manager_name],
-        condition=IfCondition(use_internal_bus_gripper_comm),
+        condition=UnlessCondition(use_fake_hardware),
     )
 
     nodes_to_start = [

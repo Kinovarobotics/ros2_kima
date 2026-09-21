@@ -23,12 +23,14 @@
  */
 //----------------------------------------------------------------------
 
+#include <chrono>
 #include <cmath>
 #include <fstream>
 #include <limits>
 #include <memory>
 #include <sstream>
 #include <string>
+#include <thread>
 #include <unordered_map>
 #include <vector>
 
@@ -223,25 +225,73 @@ CallbackReturn KortexMultiInterfaceHardware::on_configure(
     topology = buffer.str();
   }
 
-  err = driver_->scan(topology, expected_arm_);
+  // ScanNetwork can report success while the bus-state monitor latches a system
+  // fault microseconds later, on the transition into Standby (a transient
+  // PreOp->None blip is enough). Verify the state we actually landed in, and
+  // reset + rescan if it is Fault: ResetNetwork() returns the system to
+  // Initialization, which is the only way back from a system fault.
+  bool scanned = false;
+  for (int attempt = 1; attempt <= kMaxScanAttempts; ++attempt)
+  {
+    err = driver_->scan(topology, expected_arm_);
+
+    if (err.empty() && driver_->getSystemState() == RclRobotDriver::SystemState::Standby)
+    {
+      RCLCPP_INFO(LOGGER, "ScanNetwork succeeded; system is in Standby");
+      scanned = true;
+      break;
+    }
+
+    if (err.empty())
+    {
+      const std::string fault = driver_->getSystemFaultDescription();
+      RCLCPP_WARN(
+        LOGGER, "ScanNetwork returned success but the system is not in Standby (attempt %d/%d).%s%s",
+        attempt, kMaxScanAttempts, fault.empty() ? "" : " Latched system fault:\n",
+        fault.c_str());
+    }
+    else
+    {
+      RCLCPP_WARN(LOGGER, "%s (attempt %d/%d)", err.c_str(), attempt, kMaxScanAttempts);
+    }
+
+    if (attempt == kMaxScanAttempts)
+    {
+      break;
+    }
+
+    const std::string reset_err = driver_->resetNetwork();
+    if (!reset_err.empty())
+    {
+      RCLCPP_ERROR(LOGGER, "Cannot recover: %s", reset_err.c_str());
+      break;
+    }
+    std::this_thread::sleep_for(std::chrono::milliseconds{500});
+  }
+
+  if (!scanned)
+  {
+    RCLCPP_ERROR(
+      LOGGER, "Failed to bring the network to Standby after %d attempts.", kMaxScanAttempts);
+    driver_.reset();
+    return CallbackReturn::ERROR;
+  }
+
+  // Standby-only dynamic-model configuration. These are not optional: without
+  // them the dynamics model is unconfigured, so a failure here is an error.
+  err = driver_->setGravity(gravity_x_, gravity_y_, gravity_z_);
   if (!err.empty())
   {
     RCLCPP_ERROR(LOGGER, "%s", err.c_str());
     driver_.reset();
     return CallbackReturn::ERROR;
   }
-  RCLCPP_INFO(LOGGER, "ScanNetwork succeeded; system is in Standby");
-
-  // Standby-only dynamic-model configuration (best-effort).
-  err = driver_->setGravity(gravity_x_, gravity_y_, gravity_z_);
-  if (!err.empty())
-  {
-    RCLCPP_WARN(LOGGER, "%s", err.c_str());
-  }
   err = driver_->setNoTool();
   if (!err.empty())
   {
-    RCLCPP_WARN(LOGGER, "%s", err.c_str());
+    RCLCPP_ERROR(LOGGER, "%s", err.c_str());
+    driver_.reset();
+    return CallbackReturn::ERROR;
   }
 
   RCLCPP_INFO(LOGGER, "KIMA RCL hardware interface configured");
@@ -270,6 +320,8 @@ KortexMultiInterfaceHardware::export_state_interfaces()
     state_interfaces.emplace_back(hardware_interface::StateInterface(
       info_.joints[i].name, hardware_interface::HW_IF_EFFORT, &arm_efforts_[i]));
   }
+  state_interfaces.emplace_back(
+    hardware_interface::StateInterface("reset_fault", "internal_fault", &in_fault_));
   return state_interfaces;
 }
 
@@ -282,6 +334,10 @@ KortexMultiInterfaceHardware::export_command_interfaces()
     command_interfaces.emplace_back(hardware_interface::CommandInterface(
       info_.joints[i].name, hardware_interface::HW_IF_POSITION, &arm_commands_positions_[i]));
   }
+  command_interfaces.emplace_back(
+    hardware_interface::CommandInterface("reset_fault", "command", &reset_fault_cmd_));
+  command_interfaces.emplace_back(hardware_interface::CommandInterface(
+    "reset_fault", "async_success", &reset_fault_async_success_));
   return command_interfaces;
 }
 
@@ -304,14 +360,52 @@ CallbackReturn KortexMultiInterfaceHardware::on_activate(
     return CallbackReturn::ERROR;
   }
 
+  // The first cyclic exchange is where a pre-existing actuator fault surfaces:
+  // the drives latch it themselves, so it is already set before we command
+  // anything. Activation still succeeds when faulted, matching upstream
+  // ros2_kortex: the fault controller can only claim reset_fault/* while the
+  // hardware is active, so failing here would make ~/reset_fault - the only way
+  // to clear the fault - unreachable exactly when it is needed. write() gates
+  // all command output on in_fault_, so a faulted arm cannot move.
+  if (driver_->isArmFaulted())
+  {
+    in_fault_ = 1.0;
+    const std::string causes = driver_->getArmFaultDescription();
+    RCLCPP_ERROR(
+      LOGGER, "Arm is latched in Fault; no commands will be sent.%s%s",
+      causes.empty() ? "" : " Causes:\n", causes.c_str());
+    // RCL reports only that an actuator faulted, never why. These banks are the
+    // only record of the cause, so log them while the fault is still latched.
+    RCLCPP_ERROR(LOGGER, "Actuator fault banks:\n%s", driver_->getFaultBanks().c_str());
+    RCLCPP_ERROR(
+      LOGGER,
+      "Inspect the arm, then clear with: ros2 service call "
+      "/fault_controller/reset_fault example_interfaces/srv/Trigger");
+
+    RCLCPP_INFO(LOGGER, "KIMA RCL hardware interface activated (faulted, commands inhibited)");
+    return CallbackReturn::SUCCESS;
+  }
+  in_fault_ = 0.0;
+
+  if (!enterRealtimeMode())
+  {
+    return CallbackReturn::ERROR;
+  }
+
+  RCLCPP_INFO(LOGGER, "KIMA RCL hardware interface activated");
+  return CallbackReturn::SUCCESS;
+}
+
+bool KortexMultiInterfaceHardware::enterRealtimeMode()
+{
   // Seed states and the command buffer from the arm's current position so there
   // is no discontinuity when RealTimeJointPosition engages.
-  err = driver_->getFeedback(
+  std::string err = driver_->getFeedback(
     fb_position_deg_.data(), fb_velocity_deg_.data(), fb_torque_nm_.data(), actuator_count_);
   if (!err.empty())
   {
     RCLCPP_ERROR(LOGGER, "Initial feedback read failed: %s", err.c_str());
-    return CallbackReturn::ERROR;
+    return false;
   }
 
   for (std::size_t i = 0; i < actuator_count_; i++)
@@ -327,11 +421,9 @@ CallbackReturn KortexMultiInterfaceHardware::on_activate(
   if (!err.empty())
   {
     RCLCPP_ERROR(LOGGER, "%s", err.c_str());
-    return CallbackReturn::ERROR;
+    return false;
   }
-
-  RCLCPP_INFO(LOGGER, "KIMA RCL hardware interface activated");
-  return CallbackReturn::SUCCESS;
+  return true;
 }
 
 CallbackReturn KortexMultiInterfaceHardware::on_deactivate(
@@ -379,6 +471,10 @@ return_type KortexMultiInterfaceHardware::read(
     return return_type::ERROR;
   }
 
+  // Published on reset_fault/internal_fault; refreshed from the control callback,
+  // so this costs an atomic load rather than a bus query.
+  in_fault_ = driver_->armFaultLatched() ? 1.0 : 0.0;
+
   for (std::size_t i = 0; i < actuator_count_; i++)
   {
     // NOTE: continuous joints (1,3,5,7) may need turn-count unwrapping; v1 uses a
@@ -398,6 +494,73 @@ return_type KortexMultiInterfaceHardware::write(
   if (!driver_)
   {
     return return_type::ERROR;
+  }
+
+  // Service a pending reset_fault request from the fault controller. The clear
+  // sequence itself blocks, so it runs on the driver's worker thread and we only
+  // poll it here; the controller spins on reset_fault/async_success meanwhile.
+  if (!std::isnan(reset_fault_cmd_))
+  {
+    switch (driver_->clearArmFaultsResult())
+    {
+      case RclRobotDriver::ClearFaultsResult::Idle:
+        RCLCPP_INFO(LOGGER, "reset_fault requested; clearing arm faults.");
+        driver_->requestClearArmFaults();
+        break;
+
+      case RclRobotDriver::ClearFaultsResult::Pending:
+        break;  // still running; keep the controller waiting
+
+      case RclRobotDriver::ClearFaultsResult::Success:
+        RCLCPP_INFO(LOGGER, "Arm faults cleared.");
+        in_fault_ = 0.0;
+        // Activation skips mode selection while faulted, so enter it now;
+        // enterRealtimeMode() reseeds from the live position first, so the arm
+        // does not jump to a command buffered before the fault.
+        if (!enterRealtimeMode())
+        {
+          RCLCPP_ERROR(LOGGER, "Faults cleared but real-time mode could not be entered.");
+          reset_fault_async_success_ = 0.0;
+        }
+        else
+        {
+          reset_fault_async_success_ = 1.0;
+        }
+        reset_fault_cmd_ = std::numeric_limits<double>::quiet_NaN();
+        driver_->consumeClearArmFaultsResult();
+        break;
+
+      case RclRobotDriver::ClearFaultsResult::NotFaulted:
+        // RCL rejects ClearFault unless the arm is actually in Fault. A reset
+        // asked of a healthy arm is a no-op, not a failure, so report success:
+        // a reset service should be idempotent. Deliberately does NOT call
+        // enterRealtimeMode() - there is no fault to recover from, and re-entering
+        // the mode would interrupt whatever controller is currently running.
+        RCLCPP_INFO(LOGGER, "reset_fault: arm is not in Fault; nothing to clear.");
+        in_fault_ = 0.0;
+        reset_fault_async_success_ = 1.0;
+        reset_fault_cmd_ = std::numeric_limits<double>::quiet_NaN();
+        driver_->consumeClearArmFaultsResult();
+        break;
+
+      case RclRobotDriver::ClearFaultsResult::Failure:
+        RCLCPP_ERROR(
+          LOGGER, "Clear-faults sequence failed: %s\nFault banks:\n%s",
+          driver_->clearArmFaultsMessage().c_str(), driver_->getFaultBanks().c_str());
+        reset_fault_async_success_ = 0.0;
+        reset_fault_cmd_ = std::numeric_limits<double>::quiet_NaN();
+        driver_->consumeClearArmFaultsResult();
+        break;
+    }
+  }
+
+  // A faulted arm accepts no commands. Gating here (rather than refusing to
+  // activate) keeps the reset path above reachable, as upstream ros2_kortex does.
+  if (in_fault_ != 0.0)
+  {
+    RCLCPP_ERROR_THROTTLE(
+      LOGGER, g_clock, 5000, "Arm is faulted; commands inhibited. Clear via ~/reset_fault.");
+    return return_type::OK;
   }
 
   // Publish the latest position command (rad -> deg) into the driver's lock-free

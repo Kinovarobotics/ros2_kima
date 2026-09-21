@@ -48,6 +48,32 @@ public:
   /** Maximum number of actuators (matches rcl::api::g_max_number_of_actuators). */
   static constexpr std::size_t kMaxJoints = 7;
 
+  /**
+   * @brief Coarse RCL system state, mirrored here so this header stays RCL-free.
+   *
+   * Values match rcl::api::RclSystemState; Unknown is returned when the state
+   * cannot be read (e.g. before init()).
+   */
+  enum class SystemState : std::uint8_t
+  {
+    Initialization,
+    Standby,
+    Maintenance,
+    Operational,
+    Fault,
+    Unknown,
+  };
+
+  /** Outcome of an asynchronous clear-faults request. */
+  enum class ClearFaultsResult : std::uint8_t
+  {
+    Idle,     ///< No request has been made since the last one was collected.
+    Pending,  ///< A clear sequence is running on the worker thread.
+    Success,  ///< Every actuator's fault was cleared.
+    NotFaulted,  ///< RCL refused the request: the arm was not in Fault, so there was nothing to clear.
+    Failure,  ///< The clear sequence ran and finished with at least one fault remaining.
+  };
+
   /** Expected arm identity, validated by the bus scan. */
   struct ArmIdentity
   {
@@ -120,6 +146,65 @@ public:
 
   /** True once a system fault has been signalled by RCL. */
   bool isSystemFaulted() const;
+
+  /** Current coarse system state, or SystemState::Unknown if it cannot be read. */
+  SystemState getSystemState() const;
+
+  /**
+   * @brief Reset the network (Fault -> Initialization) so a new scan can be issued.
+   *
+   * RCL only accepts this from a fault state; calling it otherwise returns an error.
+   */
+  std::string resetNetwork();
+
+  /** Every latched system-fault cause, one per line ("" when no fault is latched). */
+  std::string getSystemFaultDescription() const;
+
+  /**
+   * @brief True when the arm itself is latched in Fault (distinct from a system fault).
+   *
+   * Queries the bus, so it is for one-shot use (e.g. on_activate); the update
+   * loop should use armFaultLatched() instead.
+   */
+  bool isArmFaulted() const;
+
+  /**
+   * @brief Arm fault state as of the last control cycle.
+   *
+   * Refreshed by the real-time callback, so this is a plain atomic load with no
+   * bus traffic - safe to call every update.
+   */
+  bool armFaultLatched() const;
+
+  /** Every latched arm-fault cause, one per line ("" when no fault is latched). */
+  std::string getArmFaultDescription() const;
+
+  /**
+   * @brief Per-joint fault bitfields, one line per actuator.
+   *
+   * RCL reports only that an actuator faulted, never why; these four banks are
+   * the only place the manufacturer's cause bits are exposed. Logged on every
+   * arm fault so the cause is recoverable after the fact.
+   */
+  std::string getFaultBanks() const;
+
+  /**
+   * @brief Request an asynchronous ClearArmFaults on the worker thread.
+   *
+   * ClearArmFaults blocks until the per-actuator sequence resolves, which must
+   * never happen on the controller_manager update loop. Returns immediately;
+   * poll clearArmFaultsResult(). A request made while one is Pending is ignored.
+   */
+  void requestClearArmFaults();
+
+  /** Outcome of the latest requestClearArmFaults(). */
+  ClearFaultsResult clearArmFaultsResult() const;
+
+  /** RCL's description of the latest clear-faults outcome (empty on success). */
+  std::string clearArmFaultsMessage() const;
+
+  /** Reset the clear-faults result back to Idle once it has been consumed. */
+  void consumeClearArmFaultsResult();
 
 private:
   struct Impl;

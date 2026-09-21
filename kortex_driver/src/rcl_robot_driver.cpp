@@ -21,11 +21,15 @@
 #include <array>
 #include <atomic>
 #include <cmath>
+#include <condition_variable>
 #include <cstddef>
 #include <limits>
 #include <memory>
+#include <mutex>
 #include <span>
+#include <sstream>
 #include <string>
+#include <thread>
 #include <vector>
 
 #include <rcl/rcl.h>
@@ -64,11 +68,85 @@ struct RclRobotDriver::Impl
   // Set by the system-fault callback.
   std::atomic<bool> system_faulted{false};
 
+  // Mirrors the arm's fault state, refreshed every control cycle.
+  std::atomic<bool> arm_faulted{false};
+
+  // Clear-faults worker. ClearArmFaults() blocks until the per-actuator
+  // sequence resolves, so it runs here instead of on the update loop.
+  std::thread clear_worker;
+  std::mutex clear_mutex;
+  std::condition_variable clear_cv;
+  bool clear_requested{false};
+  bool clear_stop{false};
+  std::atomic<RclRobotDriver::ClearFaultsResult> clear_result{
+    RclRobotDriver::ClearFaultsResult::Idle};
+  mutable std::mutex clear_msg_mutex;
+  std::string clear_msg;
+
   Impl()
   {
     for (auto & c : cmd_deg)
     {
       c.store(kNoCmd, std::memory_order_relaxed);
+    }
+  }
+
+  ~Impl() { stopWorker(); }
+
+  void startWorker()
+  {
+    clear_worker = std::thread([this] { workerLoop(); });
+  }
+
+  void stopWorker()
+  {
+    if (!clear_worker.joinable())
+    {
+      return;
+    }
+    {
+      std::lock_guard<std::mutex> lock(clear_mutex);
+      clear_stop = true;
+    }
+    clear_cv.notify_one();
+    clear_worker.join();
+  }
+
+  void workerLoop()
+  {
+    for (;;)
+    {
+      {
+        std::unique_lock<std::mutex> lock(clear_mutex);
+        clear_cv.wait(lock, [this] { return clear_requested || clear_stop; });
+        if (clear_stop)
+        {
+          return;
+        }
+        clear_requested = false;
+      }
+
+      const rcl::Result res = rcl->Robot().ClearArmFaults(kArm);
+
+      {
+        std::lock_guard<std::mutex> lock(clear_msg_mutex);
+        clear_msg = res.description.data();
+      }
+
+      // RCL only accepts ClearFault while the arm is in Fault; asking to clear a
+      // healthy arm comes back as NotAllowedInCurrentState. That is "nothing to
+      // clear", which is materially different from a clear sequence that ran and
+      // left faults behind - collapsing both onto Failure is what produced the
+      // self-contradicting "faults remaining: (no actuator reports a non-zero
+      // fault bank)" log.
+      RclRobotDriver::ClearFaultsResult outcome = RclRobotDriver::ClearFaultsResult::Success;
+      if (!res)
+      {
+        outcome = (res.error_code == rcl::ErrorCode::NotAllowedInCurrentState)
+                    ? RclRobotDriver::ClearFaultsResult::NotFaulted
+                    : RclRobotDriver::ClearFaultsResult::Failure;
+      }
+      clear_result.store(outcome, std::memory_order_release);
     }
   }
 
@@ -81,6 +159,11 @@ struct RclRobotDriver::Impl
       return;
     }
     const ArmIO & arm = arms[0];
+
+    // Cheapest place to track the arm's fault state: read() needs it every
+    // cycle and this snapshot is already in hand.
+    arm_faulted.store(
+      arm.feedback->status.state == ArmState::Fault, std::memory_order_relaxed);
 
     if (rt_active.load(std::memory_order_relaxed) &&
         arm.feedback->status.mode == ArmMode::RealTimeJointPosition)
@@ -145,6 +228,8 @@ std::string RclRobotDriver::init(
   impl_->system_faulted.store(false);
   impl_->rcl->RegisterSystemFaultCallback(
     [impl]() { impl->system_faulted.store(true); });
+
+  impl_->startWorker();
 
   return {};
 }
@@ -296,6 +381,194 @@ void RclRobotDriver::seedCommand(const double * position_deg, std::size_t n)
 bool RclRobotDriver::isSystemFaulted() const
 {
   return impl_->system_faulted.load();
+}
+
+bool RclRobotDriver::armFaultLatched() const
+{
+  return impl_->arm_faulted.load(std::memory_order_relaxed);
+}
+
+RclRobotDriver::SystemState RclRobotDriver::getSystemState() const
+{
+  if (!impl_->rcl)
+  {
+    return SystemState::Unknown;
+  }
+
+  SystemInformation info;
+  if (!impl_->rcl->GetSystemInformation(info))
+  {
+    return SystemState::Unknown;
+  }
+
+  switch (info.state)
+  {
+    case RclSystemState::Initialization:
+      return SystemState::Initialization;
+    case RclSystemState::Standby:
+      return SystemState::Standby;
+    case RclSystemState::Maintenance:
+      return SystemState::Maintenance;
+    case RclSystemState::Operational:
+      return SystemState::Operational;
+    case RclSystemState::Fault:
+      return SystemState::Fault;
+    default:
+      return SystemState::Unknown;
+  }
+}
+
+std::string RclRobotDriver::resetNetwork()
+{
+  if (!impl_->rcl)
+  {
+    return "resetNetwork called before init";
+  }
+  // A successful reset returns the system to Initialization, so the fault flag
+  // raised by the callback no longer applies to the new scan.
+  const std::string err = ToError("ResetNetwork", impl_->rcl->Network().ResetNetwork());
+  if (err.empty())
+  {
+    impl_->system_faulted.store(false);
+  }
+  return err;
+}
+
+std::string RclRobotDriver::getSystemFaultDescription() const
+{
+  if (!impl_->rcl)
+  {
+    return {};
+  }
+
+  Fault fault;
+  if (!impl_->rcl->GetSystemFault(fault) || fault.IsEmpty())
+  {
+    return {};
+  }
+
+  std::string out;
+  for (const auto & cause : fault.Errors())
+  {
+    if (!out.empty())
+    {
+      out += "\n";
+    }
+    out += "  - ";
+    out += cause.description.data();
+  }
+  return out;
+}
+
+bool RclRobotDriver::isArmFaulted() const
+{
+  if (!impl_->rcl)
+  {
+    return false;
+  }
+
+  ArmFeedback feedback;
+  if (!impl_->rcl->Robot().GetArmFeedback(kArm, feedback))
+  {
+    return false;
+  }
+  return feedback.status.state == ArmState::Fault;
+}
+
+std::string RclRobotDriver::getArmFaultDescription() const
+{
+  if (!impl_->rcl)
+  {
+    return {};
+  }
+
+  Fault fault;
+  if (!impl_->rcl->Robot().GetArmFault(kArm, fault) || fault.IsEmpty())
+  {
+    return {};
+  }
+
+  std::string out;
+  for (const auto & cause : fault.Errors())
+  {
+    if (!out.empty())
+    {
+      out += "\n";
+    }
+    out += "  - ";
+    out += cause.description.data();
+  }
+  return out;
+}
+
+std::string RclRobotDriver::getFaultBanks() const
+{
+  if (!impl_->rcl)
+  {
+    return {};
+  }
+
+  ArmFeedback feedback;
+  const rcl::Result res = impl_->rcl->Robot().GetArmFeedback(kArm, feedback);
+  if (!res)
+  {
+    return ToError("GetArmFeedback", res);
+  }
+
+  std::ostringstream out;
+  for (std::size_t i = 0; i < g_max_number_of_actuators; ++i)
+  {
+    const JointFeedback & j = feedback.cyclic_data.joints[i];
+    // Only the actuators that actually latched something are worth printing.
+    if ((j.fault_bank_a | j.fault_bank_b | j.fault_bank_c | j.fault_bank_d) == 0U)
+    {
+      continue;
+    }
+    out << "  actuator " << (i + 1) << ": a=0x" << std::hex << j.fault_bank_a << " b=0x"
+        << j.fault_bank_b << " c=0x" << j.fault_bank_c << " d=0x" << j.fault_bank_d << std::dec
+        << " (sto=" << (j.sto_activated ? "1" : "0")
+        << " brakes=" << (j.brakes_engaged ? "1" : "0") << " V=" << j.voltage
+        << " I=" << j.current << ")\n";
+  }
+
+  const std::string banks = out.str();
+  return banks.empty() ? std::string{"  (no actuator reports a non-zero fault bank)"} : banks;
+}
+
+void RclRobotDriver::requestClearArmFaults()
+{
+  if (!impl_->rcl || !impl_->clear_worker.joinable())
+  {
+    impl_->clear_result.store(ClearFaultsResult::Failure, std::memory_order_release);
+    return;
+  }
+
+  {
+    std::lock_guard<std::mutex> lock(impl_->clear_mutex);
+    if (impl_->clear_requested)
+    {
+      return;  // one already queued
+    }
+    impl_->clear_requested = true;
+  }
+  impl_->clear_result.store(ClearFaultsResult::Pending, std::memory_order_release);
+  impl_->clear_cv.notify_one();
+}
+
+RclRobotDriver::ClearFaultsResult RclRobotDriver::clearArmFaultsResult() const
+{
+  return impl_->clear_result.load(std::memory_order_acquire);
+}
+
+std::string RclRobotDriver::clearArmFaultsMessage() const
+{
+  std::lock_guard<std::mutex> lock(impl_->clear_msg_mutex);
+  return impl_->clear_msg;
+}
+
+void RclRobotDriver::consumeClearArmFaultsResult()
+{
+  impl_->clear_result.store(ClearFaultsResult::Idle, std::memory_order_release);
 }
 
 }  // namespace kortex_driver

@@ -55,6 +55,15 @@ If you want to build this repository from source or contribute back to the repos
    echo 'source ~/workspace/ros2_kortex_ws/install/setup.bash' >> ~/.bashrc
    ```
 
+6. Make sure to bring up the Ethernet connection to the robotic arm using:
+   ```
+   sudo ip link set <ip_link_name> up
+   ```
+   where the ip_link_name can be identified using:
+   ```
+   ip link
+   ```
+
 ## Usage
 
 ### KIMA Robots

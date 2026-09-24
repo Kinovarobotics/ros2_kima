@@ -69,9 +69,9 @@ public:
   {
     Idle,     ///< No request has been made since the last one was collected.
     Pending,  ///< A clear sequence is running on the worker thread.
-    Success,  ///< Every actuator's fault was cleared.
+    Success,  ///< Faults cleared, real-time mode re-entered, and the arm stayed enabled.
     NotFaulted,  ///< RCL refused the request: the arm was not in Fault, so there was nothing to clear.
-    Failure,  ///< The clear sequence ran and finished with at least one fault remaining.
+    Failure,  ///< Faults remained, re-entering real-time mode failed, or the arm faulted again.
   };
 
   /** Expected arm identity, validated by the bus scan. */
@@ -189,10 +189,12 @@ public:
   std::string getFaultBanks() const;
 
   /**
-   * @brief Request an asynchronous ClearArmFaults on the worker thread.
+   * @brief Request an asynchronous fault recovery on the worker thread.
    *
-   * ClearArmFaults blocks until the per-actuator sequence resolves, which must
-   * never happen on the controller_manager update loop. Returns immediately;
+   * Runs ClearArmFaults, then reseeds the command buffer from the live position,
+   * re-enters RealTimeJointPosition and checks the arm is still unfaulted after a
+   * short settle window. Both RCL calls block (the re-enable for ~750 ms), which
+   * must never happen on the controller_manager update loop. Returns immediately;
    * poll clearArmFaultsResult(). A request made while one is Pending is ignored.
    */
   void requestClearArmFaults();

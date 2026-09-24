@@ -75,6 +75,12 @@
           <param name="arm_nb_actuators">${arm_nb_actuators}</param>
           <param name="slave_pos_range_min">${slave_pos_range_min}</param>
           <param name="slave_pos_range_max">${slave_pos_range_max}</param>
+          <!-- Pinned to the cores reserved by the kernel cmdline
+               (isolcpus=2,3 nohz_full=2,3 rcu_nocbs=2,3). They MUST be two
+               different cores: putting the EtherCAT network thread and the
+               control thread on one core makes them preempt each other, which
+               misses the 100 ms sync-manager watchdog and latches actuator
+               faults. -1 means unpinned. -->
           <param name="network_thread_cpu_core">${network_thread_cpu_core}</param>
           <param name="control_thread_cpu_core">${control_thread_cpu_core}</param>
           <param name="gravity_x">${gravity_x}</param>

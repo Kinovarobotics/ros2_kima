@@ -50,6 +50,13 @@ target_include_directories(kortex_rcl_driver
 target_link_libraries(kortex_rcl_driver PUBLIC kinova_rcl::rcl)
 set_target_properties(kortex_rcl_driver PROPERTIES POSITION_INDEPENDENT_CODE ON)
 
+# --- Standalone fault-clear tool --------------------------------------------
+# ROS-free for the same reason as kortex_rcl_driver: it includes Kinova's
+# <rcl/rcl.h>. Run with `ros2 run kortex_driver clear_faults <topology.yaml>`.
+add_executable(clear_faults tools/clear_faults.cpp)
+target_include_directories(clear_faults PRIVATE "${KINOVA_RCL_INCLUDE_DIR}")
+target_link_libraries(clear_faults kinova_rcl::rcl)
+
 # --- ros2_control hardware plugin -------------------------------------------
 add_library(${PROJECT_NAME} SHARED
   src/hardware_interface.cpp
@@ -80,6 +87,10 @@ install(
 install(
   DIRECTORY include/
   DESTINATION include
+)
+install(
+  TARGETS clear_faults
+  DESTINATION lib/${PROJECT_NAME}
 )
 
 if(BUILD_TESTING)

@@ -97,6 +97,43 @@ You can specify the following arguments if you wish to change your arm configura
 
 * `launch_rviz` : Start an Rviz window to visualize the robot. Default value is `true`.
 
+## Clearing arm faults
+
+Actuator faults stay latched in the actuators across restarts: stopping the launch does not clear them. There are two ways to clear them.
+
+### While the arm is running: fault controller
+
+If the launch is up, clear the fault through the `fault_controller`:
+
+```bash
+ros2 service call /fault_controller/reset_fault example_interfaces/srv/Trigger
+```
+
+On success the driver re-enters real-time mode from the arm's current position. When a fault latches, the driver logs its causes and the per-actuator fault banks (`Arm fault latched. ... Actuator fault banks:`).
+
+### When the launch cannot start: RCL directly
+
+If a fault is still latched when the launch starts, the hardware may fail to activate and `ros2_control_node` exits with `SetArmMode: 'SelectMode' is not allowed in state 'Fault'`. In that case, stop the launch and clear the fault with the standalone RCL tool, which talks to the arm without ROS:
+
+```bash
+ros2 run kortex_driver clear_faults \
+  "$(ros2 pkg prefix --share kortex_description)/arms/linkm/7dof/config/network_topology_1_arm.yaml"
+```
+
+The tool scans the bus, prints the arm state, the latched causes and the fault banks, clears the faults and prints the state again. A successful run ends with:
+
+```
+[after] arm state: Idle
+[after]   (no actuator reports a non-zero fault bank)
+```
+
+Notes:
+* Only one program can hold the EtherCAT master at a time, so `ros2_control_node` must not be running.
+* The tool never enables the arm: it stays in `Idle` with its brakes engaged.
+* RCL sometimes reports `Fault clear incomplete: N actuator(s) still in fault` even though every fault bank already reads zero. The tool, like `~/reset_fault`, retries the clear up to 3 times in that case. If it still ends in `Fault`, run it again.
+* The expected arm identity (`ARM-L3M000-001`, revision `A`, serial `0001`, 7 actuators, slaves 0-13) is fixed in `kortex_driver/tools/clear_faults.cpp` and matches the defaults in `kortex.ros2_control.xacro`. The scan fails if the arm on the bus does not match.
+* RCL numbers actuators from 0 in its own messages (`Actuator 1 self-test triggered`), while the fault-bank lines number them from 1 (`actuator 2: a=0x2000`). Both refer to the same actuator.
+
 
 
 ## Commanding the arm

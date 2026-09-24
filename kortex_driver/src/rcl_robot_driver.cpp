@@ -20,6 +20,7 @@
 
 #include <array>
 #include <atomic>
+#include <chrono>
 #include <cmath>
 #include <condition_variable>
 #include <cstddef>
@@ -42,6 +43,15 @@ using namespace rcl::api;
 
 constexpr rcl::api::RobotArm kArm = rcl::api::RobotArm::Arm1;
 constexpr double kNoCmd = std::numeric_limits<double>::quiet_NaN();
+
+// How long the arm must stay out of Fault after a post-clear re-enable before
+// the recovery counts as successful. Actuator self-test faults on enable have
+// been seen latching ~5 ms after OperationEnabled, so this leaves a wide margin.
+constexpr std::chrono::milliseconds kReenableSettle{50};
+
+// ClearArmFaults attempts when RCL reports the clear as incomplete (see workerLoop).
+constexpr int kClearAttempts = 3;
+constexpr std::chrono::milliseconds kClearRetryDelay{300};
 
 // Turn an RCL Result into "" on success or "<prefix>: <description>".
 std::string ToError(const char * prefix, const rcl::Result & res)
@@ -126,11 +136,18 @@ struct RclRobotDriver::Impl
         clear_requested = false;
       }
 
-      const rcl::Result res = rcl->Robot().ClearArmFaults(kArm);
-
+      // A clear can come back ArmFaultClearIncomplete even though every fault
+      // bank already reads zero: RCL samples the actuators' fault-status bits
+      // before they drop. Asking again finds no actuator in fault and releases
+      // the arm, so retry that one case a few times.
+      rcl::Result res = rcl->Robot().ClearArmFaults(kArm);
+      for (int attempt = 2;
+           !res && res.error_code == rcl::ErrorCode::ArmFaultClearIncomplete &&
+           attempt <= kClearAttempts;
+           ++attempt)
       {
-        std::lock_guard<std::mutex> lock(clear_msg_mutex);
-        clear_msg = res.description.data();
+        std::this_thread::sleep_for(kClearRetryDelay);
+        res = rcl->Robot().ClearArmFaults(kArm);
       }
 
       // RCL only accepts ClearFault while the arm is in Fault; asking to clear a
@@ -140,14 +157,84 @@ struct RclRobotDriver::Impl
       // self-contradicting "faults remaining: (no actuator reports a non-zero
       // fault bank)" log.
       RclRobotDriver::ClearFaultsResult outcome = RclRobotDriver::ClearFaultsResult::Success;
+      std::string msg = res.description.data();
       if (!res)
       {
         outcome = (res.error_code == rcl::ErrorCode::NotAllowedInCurrentState)
                     ? RclRobotDriver::ClearFaultsResult::NotFaulted
                     : RclRobotDriver::ClearFaultsResult::Failure;
       }
+      else
+      {
+        // The clear left the arm in Idle. Re-enabling blocks for the whole
+        // enable sequence (~750 ms measured), so it happens here rather than
+        // on the update loop.
+        msg = reenable();
+        if (!msg.empty())
+        {
+          outcome = RclRobotDriver::ClearFaultsResult::Failure;
+        }
+      }
+
+      {
+        std::lock_guard<std::mutex> lock(clear_msg_mutex);
+        clear_msg = msg;
+      }
       clear_result.store(outcome, std::memory_order_release);
     }
+  }
+
+  // Enter RealTimeJointPosition mode. Blocks until the arm is enabled.
+  rcl::Result setRealtimeMode()
+  {
+    rt_active.store(true);
+    const rcl::Result res = rcl->Robot().SetArmMode(kArm, ArmMode::RealTimeJointPosition);
+    if (!res)
+    {
+      rt_active.store(false);
+    }
+    return res;
+  }
+
+  // Worker-thread half of fault recovery: reseed the command buffer from the
+  // live position, re-enter real-time mode and confirm the arm stays enabled.
+  // Returns "" on success or the reason it failed.
+  std::string reenable()
+  {
+    // Drop out of real-time commanding first. The arm may still report
+    // RealTimeJointPosition after the fault, in which case the control callback
+    // would keep replaying the command buffered before the fault instead of
+    // mirroring the live position into it.
+    rt_active.store(false);
+
+    ArmFeedback feedback;
+    const rcl::Result fb = rcl->Robot().GetArmFeedback(kArm, feedback);
+    if (!fb)
+    {
+      return ToError("Faults cleared, but GetArmFeedback failed", fb);
+    }
+    for (std::size_t i = 0; i < g_max_number_of_actuators; ++i)
+    {
+      cmd_deg[i].store(
+        feedback.cyclic_data.joints[i].joint_position, std::memory_order_relaxed);
+    }
+
+    const rcl::Result mode = setRealtimeMode();
+    if (!mode)
+    {
+      return ToError("Faults cleared, but SetArmMode failed", mode);
+    }
+
+    // SetArmMode returning OK only means the arm reached OperationEnabled; a
+    // self-test fault can still latch a few cycles later.
+    std::this_thread::sleep_for(kReenableSettle);
+    if (arm_faulted.load(std::memory_order_relaxed))
+    {
+      rt_active.store(false);
+      return "Faults cleared, but the arm faulted again within " +
+             std::to_string(kReenableSettle.count()) + " ms of re-enabling";
+    }
+    return {};
   }
 
   // Real-time control callback: runs on RCL's control thread. No blocking,
@@ -302,14 +389,7 @@ std::string RclRobotDriver::setRealtimeJointPositionMode()
   {
     return "setRealtimeJointPositionMode called before init";
   }
-  impl_->rt_active.store(true);
-  const std::string err =
-    ToError("SetArmMode", impl_->rcl->Robot().SetArmMode(kArm, ArmMode::RealTimeJointPosition));
-  if (!err.empty())
-  {
-    impl_->rt_active.store(false);
-  }
-  return err;
+  return ToError("SetArmMode", impl_->setRealtimeMode());
 }
 
 std::string RclRobotDriver::setNoMode()

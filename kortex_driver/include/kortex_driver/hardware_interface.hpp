@@ -137,8 +137,9 @@ private:
   /**
    * @brief Seed states/commands from current feedback and enter RT joint-position mode.
    *
-   * Used both at activation and after a fault is cleared, since a faulted arm
-   * activates without ever entering the mode. Returns false on failure.
+   * Used at activation only; it blocks for the whole enable sequence. After a
+   * fault is cleared the driver's worker thread re-enters the mode instead, so
+   * the update loop never blocks. Returns false on failure.
    */
   bool enterRealtimeMode();
 };

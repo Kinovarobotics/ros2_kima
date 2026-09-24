@@ -473,7 +473,18 @@ return_type KortexMultiInterfaceHardware::read(
 
   // Published on reset_fault/internal_fault; refreshed from the control callback,
   // so this costs an atomic load rather than a bus query.
-  in_fault_ = driver_->armFaultLatched() ? 1.0 : 0.0;
+  const bool faulted = driver_->armFaultLatched();
+  if (faulted && in_fault_ == 0.0)
+  {
+    // RCL's own log only says "self-test triggered"; the causes and fault banks
+    // are the only record of why, so capture them on the edge while latched.
+    // This queries the bus and allocates, which is acceptable once per fault.
+    const std::string causes = driver_->getArmFaultDescription();
+    RCLCPP_ERROR(
+      LOGGER, "Arm fault latched.%s%s\nActuator fault banks:\n%s",
+      causes.empty() ? "" : " Causes:\n", causes.c_str(), driver_->getFaultBanks().c_str());
+  }
+  in_fault_ = faulted ? 1.0 : 0.0;
 
   for (std::size_t i = 0; i < actuator_count_; i++)
   {
@@ -496,9 +507,10 @@ return_type KortexMultiInterfaceHardware::write(
     return return_type::ERROR;
   }
 
-  // Service a pending reset_fault request from the fault controller. The clear
-  // sequence itself blocks, so it runs on the driver's worker thread and we only
-  // poll it here; the controller spins on reset_fault/async_success meanwhile.
+  // Service a pending reset_fault request from the fault controller. Clearing
+  // and re-enabling both block, so they run on the driver's worker thread and we
+  // only poll here; the controller spins on reset_fault/async_success meanwhile.
+  bool recovering = false;
   if (!std::isnan(reset_fault_cmd_))
   {
     switch (driver_->clearArmFaultsResult())
@@ -506,26 +518,24 @@ return_type KortexMultiInterfaceHardware::write(
       case RclRobotDriver::ClearFaultsResult::Idle:
         RCLCPP_INFO(LOGGER, "reset_fault requested; clearing arm faults.");
         driver_->requestClearArmFaults();
+        recovering = true;
         break;
 
       case RclRobotDriver::ClearFaultsResult::Pending:
-        break;  // still running; keep the controller waiting
+        recovering = true;  // still running; keep the controller waiting
+        break;
 
       case RclRobotDriver::ClearFaultsResult::Success:
-        RCLCPP_INFO(LOGGER, "Arm faults cleared.");
+        // The worker already re-entered real-time mode from the live position
+        // and confirmed the arm stayed enabled. Match the command interface to
+        // that position so nothing buffered before the fault is replayed.
+        RCLCPP_INFO(LOGGER, "Arm faults cleared; real-time mode re-entered.");
         in_fault_ = 0.0;
-        // Activation skips mode selection while faulted, so enter it now;
-        // enterRealtimeMode() reseeds from the live position first, so the arm
-        // does not jump to a command buffered before the fault.
-        if (!enterRealtimeMode())
+        for (std::size_t i = 0; i < actuator_count_; i++)
         {
-          RCLCPP_ERROR(LOGGER, "Faults cleared but real-time mode could not be entered.");
-          reset_fault_async_success_ = 0.0;
+          arm_commands_positions_[i] = arm_positions_[i];
         }
-        else
-        {
-          reset_fault_async_success_ = 1.0;
-        }
+        reset_fault_async_success_ = 1.0;
         reset_fault_cmd_ = std::numeric_limits<double>::quiet_NaN();
         driver_->consumeClearArmFaultsResult();
         break;
@@ -545,7 +555,7 @@ return_type KortexMultiInterfaceHardware::write(
 
       case RclRobotDriver::ClearFaultsResult::Failure:
         RCLCPP_ERROR(
-          LOGGER, "Clear-faults sequence failed: %s\nFault banks:\n%s",
+          LOGGER, "Fault recovery failed: %s\nFault banks:\n%s",
           driver_->clearArmFaultsMessage().c_str(), driver_->getFaultBanks().c_str());
         reset_fault_async_success_ = 0.0;
         reset_fault_cmd_ = std::numeric_limits<double>::quiet_NaN();
@@ -556,6 +566,13 @@ return_type KortexMultiInterfaceHardware::write(
 
   // A faulted arm accepts no commands. Gating here (rather than refusing to
   // activate) keeps the reset path above reachable, as upstream ros2_kortex does.
+  // Commands also stay gated while a recovery is in flight: the arm drops out of
+  // Fault as soon as the clear finishes, before the worker has reseeded and
+  // re-enabled, and a controller's pre-fault command must not land in between.
+  if (recovering)
+  {
+    return return_type::OK;
+  }
   if (in_fault_ != 0.0)
   {
     RCLCPP_ERROR_THROTTLE(

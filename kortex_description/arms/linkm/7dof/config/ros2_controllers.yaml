@@ -9,6 +9,9 @@
     twist_controller:
       type: picknik_twist_controller/PicknikTwistController
     update_rate: 1000
+/joint_state_broadcaster:
+  ros__parameters:
+    update_rate: 1000
 /joint_trajectory_controller:
   ros__parameters:
     action_monitor_rate: 20.0

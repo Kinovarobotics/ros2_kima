@@ -15,6 +15,7 @@
 #ifndef KORTEX_DRIVER__RCL_ROBOT_DRIVER_HPP_
 #define KORTEX_DRIVER__RCL_ROBOT_DRIVER_HPP_
 
+#include <chrono>
 #include <cstddef>
 #include <cstdint>
 #include <memory>
@@ -115,6 +116,16 @@ public:
   /** Start cyclic exchange (Standby -> Operational). */
   std::string startCyclic();
 
+  /**
+   * @brief Block until the cyclic exchange has delivered real feedback.
+   *
+   * startCyclic() returns before the first frame is processed, and feedback read
+   * in that window is uninitialized memory. Call this after startCyclic() and
+   * before any getFeedback()/isArmFaulted(). Errors on timeout or if the
+   * feedback still is not a plausible set of joint angles.
+   */
+  std::string waitForFeedback(std::chrono::milliseconds timeout);
+
   /** Stop cyclic exchange (Operational -> Standby). */
   std::string stopCyclic();
 
@@ -198,6 +209,16 @@ public:
    * poll clearArmFaultsResult(). A request made while one is Pending is ignored.
    */
   void requestClearArmFaults();
+
+  /**
+   * @brief Number of position commands the real-time guard has rejected so far.
+   *
+   * A command that is non-finite or more than 10 deg from the measured position
+   * is never sent; the joint keeps its last accepted command instead. Fills
+   * @p last_rejected_deg (size >= n) with the last rejected value per joint
+   * (NaN if none). Lock-free.
+   */
+  std::uint64_t rejectedCommandCount(double * last_rejected_deg, std::size_t n) const;
 
   /** Outcome of the latest requestClearArmFaults(). */
   ClearFaultsResult clearArmFaultsResult() const;

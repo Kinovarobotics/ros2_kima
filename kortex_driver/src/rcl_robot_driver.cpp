@@ -49,6 +49,11 @@ constexpr double kNoCmd = std::numeric_limits<double>::quiet_NaN();
 // been seen latching ~5 ms after OperationEnabled, so this leaves a wide margin.
 constexpr std::chrono::milliseconds kReenableSettle{50};
 
+// A position command further than this from the measured position is never a
+// real setpoint: the fastest joint covers ~0.36 deg per 1 ms cycle. Such a
+// command is replaced by the last accepted one instead of reaching the drives.
+constexpr double kMaxCommandOffsetDeg = 10.0;
+
 // ClearArmFaults attempts when RCL reports the clear as incomplete (see workerLoop).
 constexpr int kClearAttempts = 3;
 constexpr std::chrono::milliseconds kClearRetryDelay{300};
@@ -81,6 +86,16 @@ struct RclRobotDriver::Impl
   // Mirrors the arm's fault state, refreshed every control cycle.
   std::atomic<bool> arm_faulted{false};
 
+  // Control cycles run since construction. GetArmFeedback returns an unfilled
+  // snapshot until the first cyclic frame has been processed, so callers wait
+  // on this before trusting feedback (see waitForFeedback()).
+  std::atomic<std::uint64_t> control_cycles{0};
+
+  // Command guard: last command accepted per joint, and how many were rejected.
+  std::array<double, kMaxJoints> last_good_deg{};
+  std::atomic<std::uint64_t> rejected_cmds{0};
+  std::array<std::atomic<double>, kMaxJoints> last_rejected_deg;
+
   // Clear-faults worker. ClearArmFaults() blocks until the per-actuator
   // sequence resolves, so it runs here instead of on the update loop.
   std::thread clear_worker;
@@ -96,6 +111,10 @@ struct RclRobotDriver::Impl
   Impl()
   {
     for (auto & c : cmd_deg)
+    {
+      c.store(kNoCmd, std::memory_order_relaxed);
+    }
+    for (auto & c : last_rejected_deg)
     {
       c.store(kNoCmd, std::memory_order_relaxed);
     }
@@ -246,6 +265,7 @@ struct RclRobotDriver::Impl
       return;
     }
     const ArmIO & arm = arms[0];
+    control_cycles.fetch_add(1, std::memory_order_release);
 
     // Cheapest place to track the arm's fault state: read() needs it every
     // cycle and this snapshot is already in hand.
@@ -258,9 +278,20 @@ struct RclRobotDriver::Impl
       arm.joint_command->mode = JointModeOfOperation::Position;
       for (std::size_t i = 0; i < g_max_number_of_actuators; ++i)
       {
-        const double cmd = cmd_deg[i].load(std::memory_order_relaxed);
-        arm.joint_command->positions[i] =
-          std::isnan(cmd) ? arm.feedback->cyclic_data.joints[i].joint_position : cmd;
+        const double fb = arm.feedback->cyclic_data.joints[i].joint_position;
+        double cmd = cmd_deg[i].load(std::memory_order_relaxed);
+        if (std::isnan(cmd))
+        {
+          cmd = fb;
+        }
+        else if (!std::isfinite(cmd) || std::fabs(cmd - fb) > kMaxCommandOffsetDeg)
+        {
+          last_rejected_deg[i].store(cmd, std::memory_order_relaxed);
+          rejected_cmds.fetch_add(1, std::memory_order_relaxed);
+          cmd = last_good_deg[i];
+        }
+        last_good_deg[i] = cmd;
+        arm.joint_command->positions[i] = cmd;
       }
     }
     else
@@ -271,6 +302,7 @@ struct RclRobotDriver::Impl
       {
         cmd_deg[i].store(
           arm.feedback->cyclic_data.joints[i].joint_position, std::memory_order_relaxed);
+        last_good_deg[i] = arm.feedback->cyclic_data.joints[i].joint_position;
       }
     }
   }
@@ -372,6 +404,47 @@ std::string RclRobotDriver::startCyclic()
     return "startCyclic called before init";
   }
   return ToError("StartCyclicCommunication", impl_->rcl->Network().StartCyclicCommunication());
+}
+
+std::string RclRobotDriver::waitForFeedback(std::chrono::milliseconds timeout)
+{
+  if (!impl_->rcl)
+  {
+    return "waitForFeedback called before init";
+  }
+  // StartCyclicCommunication returns as soon as the bus reaches Op, before the
+  // first frame has been exchanged; until then GetArmFeedback hands back a
+  // snapshot that was never written (seen as values like 1.6e280 deg). Two
+  // completed control cycles guarantee at least one full feedback update.
+  const std::uint64_t start = impl_->control_cycles.load(std::memory_order_acquire);
+  const auto deadline = std::chrono::steady_clock::now() + timeout;
+  while (impl_->control_cycles.load(std::memory_order_acquire) < start + 2)
+  {
+    if (std::chrono::steady_clock::now() >= deadline)
+    {
+      return "No cyclic feedback within " + std::to_string(timeout.count()) +
+             " ms of starting the cyclic exchange";
+    }
+    std::this_thread::sleep_for(std::chrono::milliseconds{1});
+  }
+
+  // Belt and braces: refuse a snapshot that still does not look like joint angles.
+  ArmFeedback feedback;
+  const rcl::Result res = impl_->rcl->Robot().GetArmFeedback(kArm, feedback);
+  if (!res)
+  {
+    return ToError("GetArmFeedback", res);
+  }
+  for (std::size_t i = 0; i < g_max_number_of_actuators; ++i)
+  {
+    const double p = feedback.cyclic_data.joints[i].joint_position;
+    if (!std::isfinite(p) || std::fabs(p) > 3600.0)
+    {
+      return "Implausible feedback after start: joint " + std::to_string(i + 1) +
+             " position " + std::to_string(p) + " deg";
+    }
+  }
+  return {};
 }
 
 std::string RclRobotDriver::stopCyclic()
@@ -633,6 +706,19 @@ void RclRobotDriver::requestClearArmFaults()
   }
   impl_->clear_result.store(ClearFaultsResult::Pending, std::memory_order_release);
   impl_->clear_cv.notify_one();
+}
+
+std::uint64_t RclRobotDriver::rejectedCommandCount(double * last_rejected_deg, std::size_t n) const
+{
+  if (n > kMaxJoints)
+  {
+    n = kMaxJoints;
+  }
+  for (std::size_t i = 0; i < n; ++i)
+  {
+    last_rejected_deg[i] = impl_->last_rejected_deg[i].load(std::memory_order_relaxed);
+  }
+  return impl_->rejected_cmds.load(std::memory_order_relaxed);
 }
 
 RclRobotDriver::ClearFaultsResult RclRobotDriver::clearArmFaultsResult() const

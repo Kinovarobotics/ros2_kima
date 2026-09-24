@@ -23,6 +23,7 @@
  */
 //----------------------------------------------------------------------
 
+#include <array>
 #include <chrono>
 #include <cmath>
 #include <fstream>
@@ -360,6 +361,17 @@ CallbackReturn KortexMultiInterfaceHardware::on_activate(
     return CallbackReturn::ERROR;
   }
 
+  // startCyclic() returns before the first frame is processed; feedback read in
+  // that window is uninitialized. Seeding the command buffer from it sent
+  // setpoints like 1e281 deg and faulted actuators 2/4/6, and it also hid
+  // already-latched faults from isArmFaulted() below.
+  err = driver_->waitForFeedback(std::chrono::milliseconds{500});
+  if (!err.empty())
+  {
+    RCLCPP_ERROR(LOGGER, "%s", err.c_str());
+    return CallbackReturn::ERROR;
+  }
+
   // The first cyclic exchange is where a pre-existing actuator fault surfaces:
   // the drives latch it themselves, so it is already set before we command
   // anything. Activation still succeeds when faulted, matching upstream
@@ -469,6 +481,20 @@ return_type KortexMultiInterfaceHardware::read(
   {
     RCLCPP_ERROR_THROTTLE(LOGGER, g_clock, 1000, "%s", err.c_str());
     return return_type::ERROR;
+  }
+
+  // The real-time guard replaces implausible commands; report each new batch.
+  std::array<double, RclRobotDriver::kMaxJoints> rejected{};
+  const std::uint64_t n_rejected = driver_->rejectedCommandCount(rejected.data(), rejected.size());
+  if (n_rejected != rejected_logged_)
+  {
+    RCLCPP_ERROR_THROTTLE(
+      LOGGER, g_clock, 1000,
+      "Command guard rejected %llu implausible position command(s) so far; last rejected "
+      "[deg]: %g %g %g %g %g %g %g",
+      static_cast<unsigned long long>(n_rejected), rejected[0], rejected[1], rejected[2],
+      rejected[3], rejected[4], rejected[5], rejected[6]);
+    rejected_logged_ = n_rejected;
   }
 
   // Published on reset_fault/internal_fault; refreshed from the control callback,

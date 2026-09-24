@@ -131,6 +131,9 @@ private:
   double reset_fault_async_success_{std::numeric_limits<double>::quiet_NaN()};
   double in_fault_{0.0};
 
+  // Command-guard rejections already reported by read().
+  std::uint64_t rejected_logged_{0};
+
   // Number of consecutive ScanNetwork attempts before giving up in on_configure.
   static constexpr int kMaxScanAttempts = 3;
 

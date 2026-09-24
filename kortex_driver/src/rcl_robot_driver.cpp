@@ -20,12 +20,17 @@
 
 #include <array>
 #include <atomic>
+#include <chrono>
 #include <cmath>
+#include <condition_variable>
 #include <cstddef>
 #include <limits>
 #include <memory>
+#include <mutex>
 #include <span>
+#include <sstream>
 #include <string>
+#include <thread>
 #include <vector>
 
 #include <rcl/rcl.h>
@@ -38,6 +43,20 @@ using namespace rcl::api;
 
 constexpr rcl::api::RobotArm kArm = rcl::api::RobotArm::Arm1;
 constexpr double kNoCmd = std::numeric_limits<double>::quiet_NaN();
+
+// How long the arm must stay out of Fault after a post-clear re-enable before
+// the recovery counts as successful. Actuator self-test faults on enable have
+// been seen latching ~5 ms after OperationEnabled, so this leaves a wide margin.
+constexpr std::chrono::milliseconds kReenableSettle{50};
+
+// A position command further than this from the measured position is never a
+// real setpoint: the fastest joint covers ~0.36 deg per 1 ms cycle. Such a
+// command is replaced by the last accepted one instead of reaching the drives.
+constexpr double kMaxCommandOffsetDeg = 10.0;
+
+// ClearArmFaults attempts when RCL reports the clear as incomplete (see workerLoop).
+constexpr int kClearAttempts = 3;
+constexpr std::chrono::milliseconds kClearRetryDelay{300};
 
 // Turn an RCL Result into "" on success or "<prefix>: <description>".
 std::string ToError(const char * prefix, const rcl::Result & res)
@@ -64,12 +83,177 @@ struct RclRobotDriver::Impl
   // Set by the system-fault callback.
   std::atomic<bool> system_faulted{false};
 
+  // Mirrors the arm's fault state, refreshed every control cycle.
+  std::atomic<bool> arm_faulted{false};
+
+  // Control cycles run since construction. GetArmFeedback returns an unfilled
+  // snapshot until the first cyclic frame has been processed, so callers wait
+  // on this before trusting feedback (see waitForFeedback()).
+  std::atomic<std::uint64_t> control_cycles{0};
+
+  // Command guard: last command accepted per joint, and how many were rejected.
+  std::array<double, kMaxJoints> last_good_deg{};
+  std::atomic<std::uint64_t> rejected_cmds{0};
+  std::array<std::atomic<double>, kMaxJoints> last_rejected_deg;
+
+  // Clear-faults worker. ClearArmFaults() blocks until the per-actuator
+  // sequence resolves, so it runs here instead of on the update loop.
+  std::thread clear_worker;
+  std::mutex clear_mutex;
+  std::condition_variable clear_cv;
+  bool clear_requested{false};
+  bool clear_stop{false};
+  std::atomic<RclRobotDriver::ClearFaultsResult> clear_result{
+    RclRobotDriver::ClearFaultsResult::Idle};
+  mutable std::mutex clear_msg_mutex;
+  std::string clear_msg;
+
   Impl()
   {
     for (auto & c : cmd_deg)
     {
       c.store(kNoCmd, std::memory_order_relaxed);
     }
+    for (auto & c : last_rejected_deg)
+    {
+      c.store(kNoCmd, std::memory_order_relaxed);
+    }
+  }
+
+  ~Impl() { stopWorker(); }
+
+  void startWorker()
+  {
+    clear_worker = std::thread([this] { workerLoop(); });
+  }
+
+  void stopWorker()
+  {
+    if (!clear_worker.joinable())
+    {
+      return;
+    }
+    {
+      std::lock_guard<std::mutex> lock(clear_mutex);
+      clear_stop = true;
+    }
+    clear_cv.notify_one();
+    clear_worker.join();
+  }
+
+  void workerLoop()
+  {
+    for (;;)
+    {
+      {
+        std::unique_lock<std::mutex> lock(clear_mutex);
+        clear_cv.wait(lock, [this] { return clear_requested || clear_stop; });
+        if (clear_stop)
+        {
+          return;
+        }
+        clear_requested = false;
+      }
+
+      // A clear can come back ArmFaultClearIncomplete even though every fault
+      // bank already reads zero: RCL samples the actuators' fault-status bits
+      // before they drop. Asking again finds no actuator in fault and releases
+      // the arm, so retry that one case a few times.
+      rcl::Result res = rcl->Robot().ClearArmFaults(kArm);
+      for (int attempt = 2;
+           !res && res.error_code == rcl::ErrorCode::ArmFaultClearIncomplete &&
+           attempt <= kClearAttempts;
+           ++attempt)
+      {
+        std::this_thread::sleep_for(kClearRetryDelay);
+        res = rcl->Robot().ClearArmFaults(kArm);
+      }
+
+      // RCL only accepts ClearFault while the arm is in Fault; asking to clear a
+      // healthy arm comes back as NotAllowedInCurrentState. That is "nothing to
+      // clear", which is materially different from a clear sequence that ran and
+      // left faults behind - collapsing both onto Failure is what produced the
+      // self-contradicting "faults remaining: (no actuator reports a non-zero
+      // fault bank)" log.
+      RclRobotDriver::ClearFaultsResult outcome = RclRobotDriver::ClearFaultsResult::Success;
+      std::string msg = res.description.data();
+      if (!res)
+      {
+        outcome = (res.error_code == rcl::ErrorCode::NotAllowedInCurrentState)
+                    ? RclRobotDriver::ClearFaultsResult::NotFaulted
+                    : RclRobotDriver::ClearFaultsResult::Failure;
+      }
+      else
+      {
+        // The clear left the arm in Idle. Re-enabling blocks for the whole
+        // enable sequence (~750 ms measured), so it happens here rather than
+        // on the update loop.
+        msg = reenable();
+        if (!msg.empty())
+        {
+          outcome = RclRobotDriver::ClearFaultsResult::Failure;
+        }
+      }
+
+      {
+        std::lock_guard<std::mutex> lock(clear_msg_mutex);
+        clear_msg = msg;
+      }
+      clear_result.store(outcome, std::memory_order_release);
+    }
+  }
+
+  // Enter RealTimeJointPosition mode. Blocks until the arm is enabled.
+  rcl::Result setRealtimeMode()
+  {
+    rt_active.store(true);
+    const rcl::Result res = rcl->Robot().SetArmMode(kArm, ArmMode::RealTimeJointPosition);
+    if (!res)
+    {
+      rt_active.store(false);
+    }
+    return res;
+  }
+
+  // Worker-thread half of fault recovery: reseed the command buffer from the
+  // live position, re-enter real-time mode and confirm the arm stays enabled.
+  // Returns "" on success or the reason it failed.
+  std::string reenable()
+  {
+    // Drop out of real-time commanding first. The arm may still report
+    // RealTimeJointPosition after the fault, in which case the control callback
+    // would keep replaying the command buffered before the fault instead of
+    // mirroring the live position into it.
+    rt_active.store(false);
+
+    ArmFeedback feedback;
+    const rcl::Result fb = rcl->Robot().GetArmFeedback(kArm, feedback);
+    if (!fb)
+    {
+      return ToError("Faults cleared, but GetArmFeedback failed", fb);
+    }
+    for (std::size_t i = 0; i < g_max_number_of_actuators; ++i)
+    {
+      cmd_deg[i].store(
+        feedback.cyclic_data.joints[i].joint_position, std::memory_order_relaxed);
+    }
+
+    const rcl::Result mode = setRealtimeMode();
+    if (!mode)
+    {
+      return ToError("Faults cleared, but SetArmMode failed", mode);
+    }
+
+    // SetArmMode returning OK only means the arm reached OperationEnabled; a
+    // self-test fault can still latch a few cycles later.
+    std::this_thread::sleep_for(kReenableSettle);
+    if (arm_faulted.load(std::memory_order_relaxed))
+    {
+      rt_active.store(false);
+      return "Faults cleared, but the arm faulted again within " +
+             std::to_string(kReenableSettle.count()) + " ms of re-enabling";
+    }
+    return {};
   }
 
   // Real-time control callback: runs on RCL's control thread. No blocking,
@@ -81,6 +265,12 @@ struct RclRobotDriver::Impl
       return;
     }
     const ArmIO & arm = arms[0];
+    control_cycles.fetch_add(1, std::memory_order_release);
+
+    // Cheapest place to track the arm's fault state: read() needs it every
+    // cycle and this snapshot is already in hand.
+    arm_faulted.store(
+      arm.feedback->status.state == ArmState::Fault, std::memory_order_relaxed);
 
     if (rt_active.load(std::memory_order_relaxed) &&
         arm.feedback->status.mode == ArmMode::RealTimeJointPosition)
@@ -88,9 +278,20 @@ struct RclRobotDriver::Impl
       arm.joint_command->mode = JointModeOfOperation::Position;
       for (std::size_t i = 0; i < g_max_number_of_actuators; ++i)
       {
-        const double cmd = cmd_deg[i].load(std::memory_order_relaxed);
-        arm.joint_command->positions[i] =
-          std::isnan(cmd) ? arm.feedback->cyclic_data.joints[i].joint_position : cmd;
+        const double fb = arm.feedback->cyclic_data.joints[i].joint_position;
+        double cmd = cmd_deg[i].load(std::memory_order_relaxed);
+        if (std::isnan(cmd))
+        {
+          cmd = fb;
+        }
+        else if (!std::isfinite(cmd) || std::fabs(cmd - fb) > kMaxCommandOffsetDeg)
+        {
+          last_rejected_deg[i].store(cmd, std::memory_order_relaxed);
+          rejected_cmds.fetch_add(1, std::memory_order_relaxed);
+          cmd = last_good_deg[i];
+        }
+        last_good_deg[i] = cmd;
+        arm.joint_command->positions[i] = cmd;
       }
     }
     else
@@ -101,6 +302,7 @@ struct RclRobotDriver::Impl
       {
         cmd_deg[i].store(
           arm.feedback->cyclic_data.joints[i].joint_position, std::memory_order_relaxed);
+        last_good_deg[i] = arm.feedback->cyclic_data.joints[i].joint_position;
       }
     }
   }
@@ -145,6 +347,8 @@ std::string RclRobotDriver::init(
   impl_->system_faulted.store(false);
   impl_->rcl->RegisterSystemFaultCallback(
     [impl]() { impl->system_faulted.store(true); });
+
+  impl_->startWorker();
 
   return {};
 }
@@ -202,6 +406,47 @@ std::string RclRobotDriver::startCyclic()
   return ToError("StartCyclicCommunication", impl_->rcl->Network().StartCyclicCommunication());
 }
 
+std::string RclRobotDriver::waitForFeedback(std::chrono::milliseconds timeout)
+{
+  if (!impl_->rcl)
+  {
+    return "waitForFeedback called before init";
+  }
+  // StartCyclicCommunication returns as soon as the bus reaches Op, before the
+  // first frame has been exchanged; until then GetArmFeedback hands back a
+  // snapshot that was never written (seen as values like 1.6e280 deg). Two
+  // completed control cycles guarantee at least one full feedback update.
+  const std::uint64_t start = impl_->control_cycles.load(std::memory_order_acquire);
+  const auto deadline = std::chrono::steady_clock::now() + timeout;
+  while (impl_->control_cycles.load(std::memory_order_acquire) < start + 2)
+  {
+    if (std::chrono::steady_clock::now() >= deadline)
+    {
+      return "No cyclic feedback within " + std::to_string(timeout.count()) +
+             " ms of starting the cyclic exchange";
+    }
+    std::this_thread::sleep_for(std::chrono::milliseconds{1});
+  }
+
+  // Belt and braces: refuse a snapshot that still does not look like joint angles.
+  ArmFeedback feedback;
+  const rcl::Result res = impl_->rcl->Robot().GetArmFeedback(kArm, feedback);
+  if (!res)
+  {
+    return ToError("GetArmFeedback", res);
+  }
+  for (std::size_t i = 0; i < g_max_number_of_actuators; ++i)
+  {
+    const double p = feedback.cyclic_data.joints[i].joint_position;
+    if (!std::isfinite(p) || std::fabs(p) > 3600.0)
+    {
+      return "Implausible feedback after start: joint " + std::to_string(i + 1) +
+             " position " + std::to_string(p) + " deg";
+    }
+  }
+  return {};
+}
+
 std::string RclRobotDriver::stopCyclic()
 {
   if (!impl_->rcl)
@@ -217,14 +462,7 @@ std::string RclRobotDriver::setRealtimeJointPositionMode()
   {
     return "setRealtimeJointPositionMode called before init";
   }
-  impl_->rt_active.store(true);
-  const std::string err =
-    ToError("SetArmMode", impl_->rcl->Robot().SetArmMode(kArm, ArmMode::RealTimeJointPosition));
-  if (!err.empty())
-  {
-    impl_->rt_active.store(false);
-  }
-  return err;
+  return ToError("SetArmMode", impl_->setRealtimeMode());
 }
 
 std::string RclRobotDriver::setNoMode()
@@ -296,6 +534,207 @@ void RclRobotDriver::seedCommand(const double * position_deg, std::size_t n)
 bool RclRobotDriver::isSystemFaulted() const
 {
   return impl_->system_faulted.load();
+}
+
+bool RclRobotDriver::armFaultLatched() const
+{
+  return impl_->arm_faulted.load(std::memory_order_relaxed);
+}
+
+RclRobotDriver::SystemState RclRobotDriver::getSystemState() const
+{
+  if (!impl_->rcl)
+  {
+    return SystemState::Unknown;
+  }
+
+  SystemInformation info;
+  if (!impl_->rcl->GetSystemInformation(info))
+  {
+    return SystemState::Unknown;
+  }
+
+  switch (info.state)
+  {
+    case RclSystemState::Initialization:
+      return SystemState::Initialization;
+    case RclSystemState::Standby:
+      return SystemState::Standby;
+    case RclSystemState::Maintenance:
+      return SystemState::Maintenance;
+    case RclSystemState::Operational:
+      return SystemState::Operational;
+    case RclSystemState::Fault:
+      return SystemState::Fault;
+    default:
+      return SystemState::Unknown;
+  }
+}
+
+std::string RclRobotDriver::resetNetwork()
+{
+  if (!impl_->rcl)
+  {
+    return "resetNetwork called before init";
+  }
+  // A successful reset returns the system to Initialization, so the fault flag
+  // raised by the callback no longer applies to the new scan.
+  const std::string err = ToError("ResetNetwork", impl_->rcl->Network().ResetNetwork());
+  if (err.empty())
+  {
+    impl_->system_faulted.store(false);
+  }
+  return err;
+}
+
+std::string RclRobotDriver::getSystemFaultDescription() const
+{
+  if (!impl_->rcl)
+  {
+    return {};
+  }
+
+  Fault fault;
+  if (!impl_->rcl->GetSystemFault(fault) || fault.IsEmpty())
+  {
+    return {};
+  }
+
+  std::string out;
+  for (const auto & cause : fault.Errors())
+  {
+    if (!out.empty())
+    {
+      out += "\n";
+    }
+    out += "  - ";
+    out += cause.description.data();
+  }
+  return out;
+}
+
+bool RclRobotDriver::isArmFaulted() const
+{
+  if (!impl_->rcl)
+  {
+    return false;
+  }
+
+  ArmFeedback feedback;
+  if (!impl_->rcl->Robot().GetArmFeedback(kArm, feedback))
+  {
+    return false;
+  }
+  return feedback.status.state == ArmState::Fault;
+}
+
+std::string RclRobotDriver::getArmFaultDescription() const
+{
+  if (!impl_->rcl)
+  {
+    return {};
+  }
+
+  Fault fault;
+  if (!impl_->rcl->Robot().GetArmFault(kArm, fault) || fault.IsEmpty())
+  {
+    return {};
+  }
+
+  std::string out;
+  for (const auto & cause : fault.Errors())
+  {
+    if (!out.empty())
+    {
+      out += "\n";
+    }
+    out += "  - ";
+    out += cause.description.data();
+  }
+  return out;
+}
+
+std::string RclRobotDriver::getFaultBanks() const
+{
+  if (!impl_->rcl)
+  {
+    return {};
+  }
+
+  ArmFeedback feedback;
+  const rcl::Result res = impl_->rcl->Robot().GetArmFeedback(kArm, feedback);
+  if (!res)
+  {
+    return ToError("GetArmFeedback", res);
+  }
+
+  std::ostringstream out;
+  for (std::size_t i = 0; i < g_max_number_of_actuators; ++i)
+  {
+    const JointFeedback & j = feedback.cyclic_data.joints[i];
+    // Only the actuators that actually latched something are worth printing.
+    if ((j.fault_bank_a | j.fault_bank_b | j.fault_bank_c | j.fault_bank_d) == 0U)
+    {
+      continue;
+    }
+    out << "  actuator " << (i + 1) << ": a=0x" << std::hex << j.fault_bank_a << " b=0x"
+        << j.fault_bank_b << " c=0x" << j.fault_bank_c << " d=0x" << j.fault_bank_d << std::dec
+        << " (sto=" << (j.sto_activated ? "1" : "0")
+        << " brakes=" << (j.brakes_engaged ? "1" : "0") << " V=" << j.voltage
+        << " I=" << j.current << ")\n";
+  }
+
+  const std::string banks = out.str();
+  return banks.empty() ? std::string{"  (no actuator reports a non-zero fault bank)"} : banks;
+}
+
+void RclRobotDriver::requestClearArmFaults()
+{
+  if (!impl_->rcl || !impl_->clear_worker.joinable())
+  {
+    impl_->clear_result.store(ClearFaultsResult::Failure, std::memory_order_release);
+    return;
+  }
+
+  {
+    std::lock_guard<std::mutex> lock(impl_->clear_mutex);
+    if (impl_->clear_requested)
+    {
+      return;  // one already queued
+    }
+    impl_->clear_requested = true;
+  }
+  impl_->clear_result.store(ClearFaultsResult::Pending, std::memory_order_release);
+  impl_->clear_cv.notify_one();
+}
+
+std::uint64_t RclRobotDriver::rejectedCommandCount(double * last_rejected_deg, std::size_t n) const
+{
+  if (n > kMaxJoints)
+  {
+    n = kMaxJoints;
+  }
+  for (std::size_t i = 0; i < n; ++i)
+  {
+    last_rejected_deg[i] = impl_->last_rejected_deg[i].load(std::memory_order_relaxed);
+  }
+  return impl_->rejected_cmds.load(std::memory_order_relaxed);
+}
+
+RclRobotDriver::ClearFaultsResult RclRobotDriver::clearArmFaultsResult() const
+{
+  return impl_->clear_result.load(std::memory_order_acquire);
+}
+
+std::string RclRobotDriver::clearArmFaultsMessage() const
+{
+  std::lock_guard<std::mutex> lock(impl_->clear_msg_mutex);
+  return impl_->clear_msg;
+}
+
+void RclRobotDriver::consumeClearArmFaultsResult()
+{
+  impl_->clear_result.store(ClearFaultsResult::Idle, std::memory_order_release);
 }
 
 }  // namespace kortex_driver

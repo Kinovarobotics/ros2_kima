@@ -11,36 +11,27 @@ if(CMAKE_COMPILER_IS_GNUCXX OR CMAKE_CXX_COMPILER_ID MATCHES "Clang")
   add_compile_options(-Wall -Wextra)
 endif()
 
-# --- Kinova Robot Control Library (RCL) SDK ---------------------------------
-# Not a ROS package. Point KINOVA_RCL_ROOT at the extracted SDK release
-# directory, or override with -DKINOVA_RCL_ROOT=...
-set(KINOVA_RCL_ROOT
-  "/home/aalmrad/Documents/KIMA/RCL/robot_control_library_linux_x86_gcc13_release_0.1.0-dev.126"
-  CACHE PATH "Path to the extracted Kinova RCL SDK (contains include/ and lib/).")
-
-# IMPORTANT: link the STATIC archive (librcl.a), not librcl.so. Kinova's shared
-# library has the SONAME `librcl.so`, which is identical to ROS 2's own `rcl`
-# library — the dynamic loader would resolve our `librcl.so` NEEDED entry to
-# ROS's librcl.so and leave every Kinova rcl::api symbol undefined. Statically
-# linking the archive folds the Kinova code into this plugin and removes the
-# runtime dependency (and the name clash) altogether.
-set(RCL_LIBRARY "${KINOVA_RCL_ROOT}/lib/librcl.a")
-if(NOT EXISTS "${RCL_LIBRARY}")
-  message(FATAL_ERROR
-    "librcl.a not found at ${RCL_LIBRARY}. Set -DKINOVA_RCL_ROOT to the RCL SDK path.")
-endif()
-
-# Imported handle for librcl.a. NOTE: deliberately NO INTERFACE_INCLUDE_DIRECTORIES
-# — Kinova's <rcl/rcl.h> collides with ROS 2's rcl, so the SDK include dir must
-# never leak onto a target that also pulls in rclcpp.
-add_library(rcl_sdk STATIC IMPORTED)
-set_target_properties(rcl_sdk PROPERTIES IMPORTED_LOCATION "${RCL_LIBRARY}")
-
 # find dependencies
 find_package(ament_cmake REQUIRED)
+find_package(ament_index_cpp REQUIRED)
 find_package(hardware_interface REQUIRED)
 find_package(pluginlib REQUIRED)
 find_package(rclcpp REQUIRED)
+
+# --- Kinova Robot Control Library (RCL) SDK ---------------------------------
+# Not a ROS package. Vendored by kinova_rcl_vendor, which downloads the released
+# tarball and exports the imported target kinova_rcl::rcl plus the variable
+# KINOVA_RCL_INCLUDE_DIR.
+#
+# IMPORTANT: that target links the STATIC archive (librcl.a), not librcl.so, and
+# carries no interface include directories. Kinova's shared library has the
+# SONAME `librcl.so`, identical to ROS 2's own `rcl` library — the dynamic loader
+# would resolve our `librcl.so` NEEDED entry to ROS's and leave every Kinova
+# rcl::api symbol undefined. Its headers collide for the same reason, so
+# KINOVA_RCL_INCLUDE_DIR must never be added to a target that also pulls in
+# rclcpp. Static linking folds the Kinova code into this plugin and removes the
+# runtime dependency (and the name clash) altogether.
+find_package(kinova_rcl_vendor REQUIRED)
 
 # --- ROS-free RCL wrapper ---------------------------------------------------
 # Compiled in isolation: this is the only target that sees the Kinova RCL
@@ -52,12 +43,19 @@ add_library(kortex_rcl_driver STATIC
 target_include_directories(kortex_rcl_driver
   PRIVATE
     include
-    "${KINOVA_RCL_ROOT}/include"
+    "${KINOVA_RCL_INCLUDE_DIR}"
 )
-# PUBLIC so librcl.so propagates to the plugin for linking; rcl_sdk exposes no
-# include dirs, so nothing leaks.
-target_link_libraries(kortex_rcl_driver PUBLIC rcl_sdk ${CMAKE_DL_LIBS} pthread)
+# PUBLIC so librcl.a propagates to the plugin for linking; kinova_rcl::rcl
+# exposes no include dirs, so nothing leaks.
+target_link_libraries(kortex_rcl_driver PUBLIC kinova_rcl::rcl)
 set_target_properties(kortex_rcl_driver PROPERTIES POSITION_INDEPENDENT_CODE ON)
+
+# --- Standalone fault-clear tool --------------------------------------------
+# ROS-free for the same reason as kortex_rcl_driver: it includes Kinova's
+# <rcl/rcl.h>. Run with `ros2 run kortex_driver clear_faults <topology.yaml>`.
+add_executable(clear_faults tools/clear_faults.cpp)
+target_include_directories(clear_faults PRIVATE "${KINOVA_RCL_INCLUDE_DIR}")
+target_link_libraries(clear_faults kinova_rcl::rcl)
 
 # --- ros2_control hardware plugin -------------------------------------------
 add_library(${PROJECT_NAME} SHARED
@@ -71,6 +69,7 @@ target_include_directories(${PROJECT_NAME}
 target_link_libraries(${PROJECT_NAME} kortex_rcl_driver)
 ament_target_dependencies(
   ${PROJECT_NAME}
+  ament_index_cpp
   hardware_interface
   pluginlib
   rclcpp
@@ -89,6 +88,10 @@ install(
   DIRECTORY include/
   DESTINATION include
 )
+install(
+  TARGETS clear_faults
+  DESTINATION lib/${PROJECT_NAME}
+)
 
 if(BUILD_TESTING)
 endif()
@@ -101,6 +104,7 @@ ament_export_libraries(
   ${PROJECT_NAME}
 )
 ament_export_dependencies(
+  ament_index_cpp
   hardware_interface
   pluginlib
   rclcpp

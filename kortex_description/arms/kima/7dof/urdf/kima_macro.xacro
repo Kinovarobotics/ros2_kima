@@ -1,8 +1,8 @@
 <?xml version="1.0"?>
 
-<robot name="linkm_arm" xmlns:xacro="http://ros.org/wiki/xacro">
+<robot name="kima_arm" xmlns:xacro="http://ros.org/wiki/xacro">
 
-  <!-- last_arm_link is read by kortex_robot.xacro to attach the gripper or tool_frame -->
+  <!-- last_arm_link is read by kortex_robot.xacro to attach the tool_frame -->
   <xacro:property name="last_arm_link" value="end_effector_link"/>
   <xacro:property name="PI" value="3.1415926535897931"/>
 
@@ -19,10 +19,6 @@
     port_realtime:=10001
     session_inactivity_timeout_ms:=6000
     connection_inactivity_timeout_ms:=2000
-    use_internal_bus_gripper_comm:=true
-    gripper_joint_name
-    gripper_max_velocity:=100.0
-    gripper_max_force:=100.0
     use_fake_hardware:=false
     fake_sensor_commands:=false
     sim_gazebo:=false
@@ -35,7 +31,7 @@
     moveit_active:=false">
 
     <!-- ros2 control include -->
-    <xacro:include filename="$(find kortex_description)/arms/linkm/7dof/urdf/kortex.ros2_control.xacro" />
+    <xacro:include filename="$(find kortex_description)/arms/kima/7dof/urdf/kortex.ros2_control.xacro" />
     <xacro:kortex_ros2_control
       name="${prefix}KortexMultiInterfaceHardware"
       prefix="${prefix}"
@@ -54,11 +50,7 @@
       port="${port}"
       port_realtime="${port_realtime}"
       session_inactivity_timeout_ms="${session_inactivity_timeout_ms}"
-      connection_inactivity_timeout_ms="${connection_inactivity_timeout_ms}"
-      use_internal_bus_gripper_comm="${use_internal_bus_gripper_comm}"
-      gripper_max_velocity="${gripper_max_velocity}"
-      gripper_max_force="${gripper_max_force}"
-      gripper_joint_name="${gripper_joint_name}"/>
+      connection_inactivity_timeout_ms="${connection_inactivity_timeout_ms}"/>
 
     <!-- Fixed joint attaching arm base to parent link -->
     <joint name="${prefix}base_joint" type="fixed">
@@ -77,7 +69,7 @@
       <visual>
         <origin xyz="0 0 0" rpy="0 0 0" />
         <geometry>
-          <mesh filename="file://$(find kortex_description)/arms/linkm/urdf/meshes/base_link.STL" />
+          <mesh filename="file://$(find kortex_description)/arms/kima/urdf/meshes/base_link.STL" />
         </geometry>
         <material name="">
           <color rgba="0.79216 0.81961 0.93333 1" />
@@ -107,7 +99,7 @@
       <visual>
         <origin xyz="0 0 0" rpy="0 0 0" />
         <geometry>
-          <mesh filename="file://$(find kortex_description)/arms/linkm/urdf/meshes/j1-j2_link.STL" />
+          <mesh filename="file://$(find kortex_description)/arms/kima/urdf/meshes/j1-j2_link.STL" />
         </geometry>
         <material name="">
           <color rgba="0.79216 0.81961 0.93333 1" />
@@ -145,7 +137,7 @@
       <visual>
         <origin xyz="0 0 0" rpy="0 0 0" />
         <geometry>
-          <mesh filename="file://$(find kortex_description)/arms/linkm/urdf/meshes/j2-j3_link.STL" />
+          <mesh filename="file://$(find kortex_description)/arms/kima/urdf/meshes/j2-j3_link.STL" />
         </geometry>
         <material name="">
           <color rgba="0.79216 0.81961 0.93333 1" />
@@ -191,7 +183,7 @@
       <visual>
         <origin xyz="0 0 0" rpy="0 0 0" />
         <geometry>
-          <mesh filename="file://$(find kortex_description)/arms/linkm/urdf/meshes/j3-j4_link.STL" />
+          <mesh filename="file://$(find kortex_description)/arms/kima/urdf/meshes/j3-j4_link.STL" />
         </geometry>
         <material name="">
           <color rgba="0.79216 0.81961 0.93333 1" />
@@ -237,7 +229,7 @@
       <visual>
         <origin xyz="0 0 0" rpy="0 0 0" />
         <geometry>
-          <mesh filename="file://$(find kortex_description)/arms/linkm/urdf/meshes/j4-j5_link.STL" />
+          <mesh filename="file://$(find kortex_description)/arms/kima/urdf/meshes/j4-j5_link.STL" />
         </geometry>
         <material name="">
           <color rgba="0.79216 0.81961 0.93333 1" />
@@ -287,7 +279,7 @@
       <visual>
         <origin xyz="0 0 0" rpy="0 0 0" />
         <geometry>
-          <mesh filename="file://$(find kortex_description)/arms/linkm/urdf/meshes/j5-j6_link.STL" />
+          <mesh filename="file://$(find kortex_description)/arms/kima/urdf/meshes/j5-j6_link.STL" />
         </geometry>
         <material name="">
           <color rgba="0.79216 0.81961 0.93333 1" />
@@ -325,7 +317,7 @@
       <visual>
         <origin xyz="0 0 0" rpy="0 0 0" />
         <geometry>
-          <mesh filename="file://$(find kortex_description)/arms/linkm/urdf/meshes/j6-j7_link.STL" />
+          <mesh filename="file://$(find kortex_description)/arms/kima/urdf/meshes/j6-j7_link.STL" />
         </geometry>
         <material name="">
           <color rgba="0.79216 0.81961 0.93333 1" />
@@ -363,7 +355,7 @@
       <visual>
         <origin xyz="0 0 0" rpy="0 0 0" />
         <geometry>
-          <mesh filename="file://$(find kortex_description)/arms/linkm/urdf/meshes/j7-tif_link.STL" />
+          <mesh filename="file://$(find kortex_description)/arms/kima/urdf/meshes/j7-tif_link.STL" />
         </geometry>
         <material name="">
           <color rgba="0.79216 0.81961 0.93333 1" />

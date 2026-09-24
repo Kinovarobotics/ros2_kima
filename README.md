@@ -1,17 +1,16 @@
 # ROS 2 KINOVA KORTEX™ (KIMA ADAPTATION)
-> Kinova® KINOVA KORTEX™ is the common software platform behind all of the products in the Gen3 family (Gen3 and Gen3 lite). It unifies the inner workings of the various robots and their related external tools, like the API. This repository is an adaptation that supports KIMA robotic arm as well. <br />
-> https://www.kinovarobotics.com/product/gen3-robots
+> ROS 2 driver, description and bringup for the KIMA robotic arm.
 
-ROS2 KINOVA KORTEX™ is the official ROS2 package to interact with KINOVA KORTEX™ and its related products. It is built upon the KINOVA KORTEX™ API, documentation for which can be found in the [GitHub Kortex repository](https://github.com/Kinovarobotics/kortex).
+This repository provides the ros2_control hardware interface, robot description and launch files for the KIMA robotic arm. The driver talks to the arm over EtherCAT through Kinova's Robot Control Library (RCL), vendored by the `kinova_rcl_vendor` package.
 
 
 ## Getting started
 
 1. Install ROS 2.
 
-   For this branch, ROS2 Humble has to be installed on Ubuntu 22.04.
+   This repository targets ROS 2 Jazzy on Ubuntu 24.04. The vendored Robot Control Library is only published for Linux x86_64 with the gcc-13 ABI.
 
-   Stable LTS Release: [Install ROS2 Humble](https://docs.ros.org/en/humble/Installation/Ubuntu-Install-Debians.html)
+   Stable LTS Release: [Install ROS 2 Jazzy](https://docs.ros.org/en/jazzy/Installation/Ubuntu-Install-Debs.html)
 
    After installing ROS2, source the setup.bash, which will set the `$ROS_DISTRO` environment variable.
 
@@ -20,9 +19,9 @@ ROS2 KINOVA KORTEX™ is the official ROS2 package to interact with KINOVA KORTE
 
 If you want to build this repository from source or contribute back to the repository read on.
 
-1. Make sure that `colcon`, its extensions, and `vcs` are installed:
+1. Make sure that `colcon` and its extensions are installed:
    ```
-   sudo apt install python3-colcon-common-extensions python3-vcstool
+   sudo apt install python3-colcon-common-extensions
    ```
 
 2. Create a new ROS2 workspace:
@@ -35,9 +34,9 @@ If you want to build this repository from source or contribute back to the repos
    ```
    cd $COLCON_WS
    git clone https://github.com/Kinovarobotics/ros2_kima.git src/ros2_kima
-   vcs import src --skip-existing --input src/ros2_kima/ros2_kortex.$ROS_DISTRO.repos
-   vcs import src --skip-existing --input src/ros2_kima/ros2_kortex-not-released.$ROS_DISTRO.repos
    ```
+
+   All other dependencies (ros2_control, the controllers, gz_ros2_control, ros_gz) are released for Jazzy and are installed by `rosdep` in the next step.
 
 
 4. Install dependencies, compile, and source the workspace:
@@ -97,6 +96,24 @@ You can specify the following arguments if you wish to change your arm configura
 
 * `launch_rviz` : Start an Rviz window to visualize the robot. Default value is `true`.
 
+### Simulation (Gazebo)
+
+To run the arm in Gazebo Sim (Harmonic) instead of on the hardware:
+
+```bash
+ros2 launch kortex_bringup kortex_sim_control.launch.py
+```
+
+This starts Gazebo, spawns the arm and activates `joint_state_broadcaster` and `joint_trajectory_controller`, so the arm can be commanded exactly as described in [Commanding the arm](#commanding-the-arm). Useful arguments:
+
+* `launch_rviz` : Start RViz. Default value is `true`.
+
+* `gz_args` : Arguments passed to `gz sim`. Default value is `" -r -v 3 empty.sdf"`. Add `-s` to run the server headless, without the Gazebo GUI.
+
+* `controllers_file` : Controllers configuration, in `kortex_description/arms/kima/7dof/config/`. Default value is `ros2_controllers_sim.yaml`.
+
+In simulation, `gz_ros2_control` replaces the EtherCAT driver, so the fault controller and the twist controller are not available. They need interfaces that only the real driver provides.
+
 ## Clearing arm faults
 
 Actuator faults stay latched in the actuators across restarts: stopping the launch does not clear them. There are two ways to clear them.
@@ -117,7 +134,7 @@ If a fault is still latched when the launch starts, the hardware may fail to act
 
 ```bash
 ros2 run kortex_driver clear_faults \
-  "$(ros2 pkg prefix --share kortex_description)/arms/linkm/7dof/config/network_topology_1_arm.yaml"
+  "$(ros2 pkg prefix --share kortex_description)/arms/kima/7dof/config/network_topology_1_arm.yaml"
 ```
 
 The tool scans the bus, prints the arm state, the latched causes and the fault banks, clears the faults and prints the state again. A successful run ends with:

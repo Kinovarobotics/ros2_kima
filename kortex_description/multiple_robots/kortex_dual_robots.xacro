@@ -3,14 +3,12 @@
 <robot name="dual_robot" xmlns:xacro="http://ros.org/wiki/xacro">
 
     <xacro:arg name="left_arm"  default=""/>
-    <xacro:arg name="left_gripper" default=""/>
     <xacro:arg name="left_dof"  default=""/>
     <xacro:arg name="left_vision" default=""/>
     <xacro:arg name="left_sim" default=""/>
     <xacro:arg name="left_prefix" default=""/>
 
     <xacro:arg name="right_arm"  default=""/>
-    <xacro:arg name="right_gripper" default=""/>
     <xacro:arg name="right_dof"  default=""/>
     <xacro:arg name="right_vision" default=""/>
     <xacro:arg name="right_sim" default=""/>
@@ -34,7 +32,6 @@
 
     <xacro:load_robot
         arm="$(arg left_arm)"
-        gripper="$(arg left_gripper)"
         dof="$(arg left_dof)"
         vision="$(arg left_vision)"
         sim="$(arg left_sim)"
@@ -42,7 +39,6 @@
     />
     <xacro:load_robot
         arm="$(arg right_arm)"
-        gripper="$(arg right_gripper)"
         dof="$(arg right_dof)"
         vision="$(arg right_vision)"
         sim="$(arg right_sim)"

@@ -27,7 +27,6 @@ from launch.substitutions import (
     FindExecutable,
     LaunchConfiguration,
     PathJoinSubstitution,
-    PythonExpression,
 )
 from launch_ros.actions import Node
 from launch_ros.parameter_descriptions import ParameterValue
@@ -68,23 +67,12 @@ def launch_setup(context, *args, **kwargs):
     description_file = LaunchConfiguration("description_file")
     robot_name = LaunchConfiguration("robot_name")
     prefix = LaunchConfiguration("prefix")
-    gripper = LaunchConfiguration("gripper")
-    gripper_max_velocity = LaunchConfiguration("gripper_max_velocity")
-    gripper_max_force = LaunchConfiguration("gripper_max_force")
     use_fake_hardware = LaunchConfiguration("use_fake_hardware")
     fake_sensor_commands = LaunchConfiguration("fake_sensor_commands")
     robot_traj_controller = LaunchConfiguration("robot_controller")
     robot_pos_controller = LaunchConfiguration("robot_pos_controller")
-    robot_hand_controller = LaunchConfiguration("robot_hand_controller")
     fault_controller = LaunchConfiguration("fault_controller")
     launch_rviz = LaunchConfiguration("launch_rviz")
-    use_internal_bus_gripper_comm = LaunchConfiguration("use_internal_bus_gripper_comm")
-    gripper_joint_name = LaunchConfiguration("gripper_joint_name")
-
-    # if we are using fake hardware then we can't use the internal gripper communications of the hardware
-    use_fake_hardware_value = use_fake_hardware.perform(context)
-    if use_fake_hardware_value == "true":
-        use_internal_bus_gripper_comm = "false"
 
     robot_description_content = Command(
         [
@@ -114,21 +102,6 @@ def launch_setup(context, *args, **kwargs):
             " ",
             "fake_sensor_commands:=",
             fake_sensor_commands,
-            " ",
-            "gripper:=",
-            gripper,
-            " ",
-            "use_internal_bus_gripper_comm:=",
-            use_internal_bus_gripper_comm,
-            " ",
-            "gripper_max_velocity:=",
-            gripper_max_velocity,
-            " ",
-            "gripper_max_force:=",
-            gripper_max_force,
-            " ",
-            "gripper_joint_name:=",
-            gripper_joint_name,
             " ",
         ]
     )
@@ -214,13 +187,6 @@ def launch_setup(context, *args, **kwargs):
         arguments=[robot_pos_controller, "--inactive", "-c", controller_manager_name],
     )
 
-    robot_hand_controller_spawner = Node(
-        package="controller_manager",
-        executable="spawner",
-        arguments=[robot_hand_controller, "-c", controller_manager_name],
-        condition=IfCondition(PythonExpression(["'", gripper, "' != ''"])),
-    )
-
     # only start the fault controller if we are using hardware; it exposes
     # ~/reset_fault, the deliberate way to clear a latched actuator fault
     fault_controller_spawner = Node(
@@ -239,10 +205,6 @@ def launch_setup(context, *args, **kwargs):
         robot_pos_controller_spawner,
         fault_controller_spawner,
     ]
-    start_robot_hand_controller = gripper.perform(context) != ""
-    # Conditionally add robot_hand_controller_spawner
-    if start_robot_hand_controller:
-        nodes_to_start.append(robot_hand_controller_spawner)
 
     return nodes_to_start
 
@@ -252,7 +214,7 @@ def generate_launch_description():
     # Robot specific arguments
     declared_arguments.append(
         DeclareLaunchArgument(
-            "robot_type", description="Type/series of robot.", choices=["gen3", "gen3_lite", "linkm"]
+            "robot_type", description="Type/series of robot.", choices=["kima"]
         )
     )
     declared_arguments.append(DeclareLaunchArgument("dof", description="DoF of robot."))
@@ -338,13 +300,6 @@ def generate_launch_description():
     )
     declared_arguments.append(
         DeclareLaunchArgument(
-            "gripper",
-            default_value="",
-            description="Name of the gripper attached to the arm",
-        )
-    )
-    declared_arguments.append(
-        DeclareLaunchArgument(
             "use_fake_hardware",
             default_value="false",
             description="Start robot with fake hardware mirroring command to its states.",
@@ -374,13 +329,6 @@ def generate_launch_description():
     )
     declared_arguments.append(
         DeclareLaunchArgument(
-            "robot_hand_controller",
-            default_value="robotiq_gripper_controller",
-            description="Robot hand controller to start.",
-        )
-    )
-    declared_arguments.append(
-        DeclareLaunchArgument(
             "fault_controller",
             default_value="fault_controller",
             description="Name of the 'fault controller.",
@@ -388,33 +336,5 @@ def generate_launch_description():
     )
     declared_arguments.append(
         DeclareLaunchArgument("launch_rviz", default_value="true", description="Launch RViz?")
-    )
-    declared_arguments.append(
-        DeclareLaunchArgument(
-            "use_internal_bus_gripper_comm",
-            default_value="true",
-            description="Use internal bus for gripper communication?",
-        )
-    )
-    declared_arguments.append(
-        DeclareLaunchArgument(
-            "gripper_max_velocity",
-            default_value="100.0",
-            description="Max velocity for gripper commands",
-        )
-    )
-    declared_arguments.append(
-        DeclareLaunchArgument(
-            "gripper_max_force",
-            default_value="100.0",
-            description="Max force for gripper commands",
-        )
-    )
-    declared_arguments.append(
-        DeclareLaunchArgument(
-            "gripper_joint_name",
-            default_value="finger_joint",
-            description="Max force for gripper commands",
-        )
     )
     return LaunchDescription(declared_arguments + [OpaqueFunction(function=launch_setup)])

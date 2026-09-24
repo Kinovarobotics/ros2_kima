@@ -26,7 +26,7 @@ def generate_launch_description():
     declared_arguments.append(
         DeclareLaunchArgument(
             "robot_type",
-            default_value="linkm",
+            default_value="kima",
             description="Type/series of robot.",
         )
     )
@@ -69,42 +69,6 @@ def generate_launch_description():
         )
     )
     declared_arguments.append(
-        DeclareLaunchArgument(
-            "gripper",
-            default_value="",
-            description="Name of the gripper attached to the arm",
-            choices=["", "robotiq_2f_85", "robotiq_2f_140"],
-        )
-    )
-    declared_arguments.append(
-        DeclareLaunchArgument(
-            "gripper_joint_name",
-            default_value="robotiq_85_left_knuckle_joint",
-            description="Name of the gripper attached to the arm",
-        )
-    )
-    declared_arguments.append(
-        DeclareLaunchArgument(
-            "use_internal_bus_gripper_comm",
-            default_value="false",
-            description="Use internal bus for gripper communication?",
-        )
-    )
-    declared_arguments.append(
-        DeclareLaunchArgument(
-            "gripper_max_velocity",
-            default_value="100.0",
-            description="Max velocity for gripper commands",
-        )
-    )
-    declared_arguments.append(
-        DeclareLaunchArgument(
-            "gripper_max_force",
-            default_value="100.0",
-            description="Max force for gripper commands",
-        )
-    )
-    declared_arguments.append(
         DeclareLaunchArgument("launch_rviz", default_value="true", description="Launch RViz?")
     )
 
@@ -115,11 +79,6 @@ def generate_launch_description():
     use_fake_hardware = LaunchConfiguration("use_fake_hardware")
     fake_sensor_commands = LaunchConfiguration("fake_sensor_commands")
     robot_controller = LaunchConfiguration("robot_controller")
-    gripper = LaunchConfiguration("gripper")
-    use_internal_bus_gripper_comm = LaunchConfiguration("use_internal_bus_gripper_comm")
-    gripper_max_velocity = LaunchConfiguration("gripper_max_velocity")
-    gripper_max_force = LaunchConfiguration("gripper_max_force")
-    gripper_joint_name = LaunchConfiguration("gripper_joint_name")
     launch_rviz = LaunchConfiguration("launch_rviz")
     controllers_file = LaunchConfiguration("controllers_file")
 
@@ -132,14 +91,9 @@ def generate_launch_description():
             "use_fake_hardware": use_fake_hardware,
             "fake_sensor_commands": fake_sensor_commands,
             "robot_controller": robot_controller,
-            "gripper": gripper,
-            "use_internal_bus_gripper_comm": use_internal_bus_gripper_comm,
-            "gripper_max_velocity": gripper_max_velocity,
-            "gripper_max_force": gripper_max_force,
-            "gripper_joint_name": gripper_joint_name,
             "launch_rviz": launch_rviz,
             "controllers_file": controllers_file,
-            "description_file": "linkm.xacro",
+            "description_file": "kima.xacro",
         }.items(),
     )
 

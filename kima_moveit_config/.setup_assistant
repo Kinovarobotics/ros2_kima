@@ -1,0 +1,9 @@
+moveit_setup_assistant_config:
+  urdf:
+    package: kortex_description
+    relative_path: robots/kima.xacro
+  srdf:
+    relative_path: config/kima.srdf
+  package_settings:
+    author_name: Abed Al Rahman Al Mrad
+    author_email: aalmrad@kinova.ca

@@ -64,7 +64,7 @@ def generate_launch_description():
     declared_arguments.append(
         DeclareLaunchArgument(
             "controllers_file",
-            default_value="ros2_controllers_parametric.yaml",
+            default_value="ros2_controllers.yaml",
             description="Robot controller to start.",
         )
     )

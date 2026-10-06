@@ -1,7 +1,8 @@
 # Controllers for the Gazebo simulation (kortex_sim_control.launch.py).
 #
-# Same trajectory controller as the real arm (ros2_controllers_parametric.yaml),
-# minus the controllers that need interfaces only the KIMA EtherCAT driver exports:
+# Same trajectory controller as the real arm (ros2_controllers.yaml),
+# plus the Cartesian motion controller, minus the controllers that need
+# interfaces only the KIMA EtherCAT driver exports:
 #   - fault_controller claims reset_fault/*
 #   - twist_controller claims tcp/twist.*
 # gz_ros2_control loads this file through the <gazebo> plugin in kinova.urdf.xacro.
@@ -14,6 +15,12 @@ controller_manager:
 
     joint_trajectory_controller:
       type: joint_trajectory_controller/JointTrajectoryController
+
+    cartesian_motion_controller:
+      type: cartesian_motion_controller/CartesianMotionController
+
+    motion_control_handle:
+      type: cartesian_controller_handles/MotionControlHandle
 
 joint_trajectory_controller:
   ros__parameters:
@@ -36,3 +43,55 @@ joint_trajectory_controller:
     constraints:
       stopped_velocity_tolerance: 0.0
       goal_time: 0.0
+
+cartesian_motion_controller:
+  ros__parameters:
+    # Tracks a target pose for tool_frame, published as geometry_msgs/PoseStamped on
+    # ~/target_frame (the motion_control_handle publishes there from RViz).
+    # FZI cartesian_controllers; the KIMA driver only exports position commands.
+    robot_base_link: base_link
+    end_effector_link: tool_frame
+    joints:
+      - joint_1
+      - joint_2
+      - joint_3
+      - joint_4
+      - joint_5
+      - joint_6
+      - joint_7
+    command_interfaces:
+      - position
+    solver:
+      # Every cycle the controller resets its internal model to the measured joint
+      # positions and simulates `iterations` steps of 0.02 s toward the target, then
+      # commands the result. The real actuators lag the position command by a few
+      # milliseconds, so a long look-ahead (e.g. 10 iterations = 0.2 s per 1 ms
+      # cycle) overshoots and oscillates around the target. Read at configure time.
+      iterations: 1
+      # Scales the Cartesian error fed to the solver: lower is slower and gentler.
+      # Read every cycle: tune live with `ros2 param set`.
+      error_scale: 0.5
+      publish_state_feedback: true
+    # p: stiffness, d: damping on the change of the error. Read every cycle.
+    pd_gains:
+      trans_x: {p: 10.0, d: 0.0}
+      trans_y: {p: 10.0, d: 0.0}
+      trans_z: {p: 10.0, d: 0.0}
+      rot_x: {p: 10.0, d: 0.0}
+      rot_y: {p: 10.0, d: 0.0}
+      rot_z: {p: 10.0, d: 0.0}
+
+motion_control_handle:
+  ros__parameters:
+    # Interactive marker in RViz that publishes the target pose for
+    # cartesian_motion_controller (remapped onto its ~/target_frame by the bringup).
+    robot_base_link: base_link
+    end_effector_link: tool_frame
+    joints:
+      - joint_1
+      - joint_2
+      - joint_3
+      - joint_4
+      - joint_5
+      - joint_6
+      - joint_7

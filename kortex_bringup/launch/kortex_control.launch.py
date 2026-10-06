@@ -32,29 +32,6 @@ from launch_ros.actions import Node
 from launch_ros.parameter_descriptions import ParameterValue
 from launch_ros.substitutions import FindPackageShare
 
-import yaml
-import os
-
-
-def load_and_apply_prefix(yaml_path, prefix):
-    with open(yaml_path) as f:
-        text = f.read()
-    # Replace ${prefix} placeholders in the text
-    text = text.replace("${prefix}", prefix)
-    data = yaml.safe_load(text)
-    # Save the resolved YAML to a new file
-    dir_name = os.path.dirname(os.path.abspath(yaml_path))
-    resolved_name = f"{prefix}ros2_controllers.yaml"
-    debug_file = os.path.join(dir_name, resolved_name)
-    try:
-        with open(debug_file, "w") as out:
-            yaml.dump(data, out, default_flow_style=False)
-        print(f"[DEBUG] Saved resolved YAML to: {debug_file}")
-    except Exception as e:
-        print(f"[WARN] Could not save resolved YAML: {e}")
-
-    return PathJoinSubstitution([dir_name, resolved_name])
-
 
 def launch_setup(context, *args, **kwargs):
     # Initialize Arguments
@@ -115,8 +92,6 @@ def launch_setup(context, *args, **kwargs):
         ]
     )
 
-    robot_controllers_str = robot_controllers.perform(context)
-
     rviz_config_file = PathJoinSubstitution(
         [FindPackageShare(description_package), "rviz", "view_robot.rviz"]
     )
@@ -128,7 +103,7 @@ def launch_setup(context, *args, **kwargs):
     control_node = Node(
         package="controller_manager",
         executable="ros2_control_node",
-        parameters=[load_and_apply_prefix(robot_controllers_str, prefix_str)],
+        parameters=[robot_controllers],
         namespace=prefix_str,
         remappings=[
             ("~/robot_description", remapped_robot_description),
@@ -187,6 +162,29 @@ def launch_setup(context, *args, **kwargs):
         arguments=[robot_pos_controller, "--inactive", "-c", controller_manager_name],
     )
 
+    # Cartesian pose tracking (FZI cartesian_controllers), loaded inactive: switch
+    # to it from joint_trajectory_controller when needed. The handle is an RViz
+    # interactive marker; its target pose is remapped straight onto the
+    # controller's input topic instead of going through a relay node.
+    cartesian_motion_controller_spawner = Node(
+        package="controller_manager",
+        executable="spawner",
+        arguments=["cartesian_motion_controller", "--inactive", "-c", controller_manager_name],
+    )
+
+    motion_control_handle_spawner = Node(
+        package="controller_manager",
+        executable="spawner",
+        arguments=[
+            "motion_control_handle",
+            "--inactive",
+            "-c",
+            controller_manager_name,
+            "--controller-ros-args",
+            "-r motion_control_handle/target_frame:=cartesian_motion_controller/target_frame",
+        ],
+    )
+
     # only start the fault controller if we are using hardware; it exposes
     # ~/reset_fault, the deliberate way to clear a latched actuator fault
     fault_controller_spawner = Node(
@@ -203,6 +201,8 @@ def launch_setup(context, *args, **kwargs):
         delay_rviz_after_joint_state_broadcaster_spawner,
         robot_traj_controller_spawner,
         robot_pos_controller_spawner,
+        cartesian_motion_controller_spawner,
+        motion_control_handle_spawner,
         fault_controller_spawner,
     ]
 
@@ -263,7 +263,7 @@ def generate_launch_description():
     declared_arguments.append(
         DeclareLaunchArgument(
             "controllers_file",
-            default_value="ros2_controllers_dual_arm_test.yaml",
+            default_value="ros2_controllers.yaml",
             description="YAML file with the controllers configuration.",
         )
     )

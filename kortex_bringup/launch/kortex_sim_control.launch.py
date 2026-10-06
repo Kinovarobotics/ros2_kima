@@ -141,6 +141,29 @@ def launch_setup(context, *args, **kwargs):
         arguments=[robot_traj_controller, "-c", "/controller_manager"],
     )
 
+    # Cartesian pose tracking (FZI cartesian_controllers), loaded inactive: switch
+    # to it from joint_trajectory_controller when needed. The handle is an RViz
+    # interactive marker; its target pose is remapped straight onto the
+    # controller's input topic instead of going through a relay node.
+    cartesian_motion_controller_spawner = Node(
+        package="controller_manager",
+        executable="spawner",
+        arguments=["cartesian_motion_controller", "--inactive", "-c", "/controller_manager"],
+    )
+
+    motion_control_handle_spawner = Node(
+        package="controller_manager",
+        executable="spawner",
+        arguments=[
+            "motion_control_handle",
+            "--inactive",
+            "-c",
+            "/controller_manager",
+            "--controller-ros-args",
+            "-r motion_control_handle/target_frame:=cartesian_motion_controller/target_frame",
+        ],
+    )
+
     # Gazebo Sim
     gz_sim = IncludeLaunchDescription(
         PythonLaunchDescriptionSource(
@@ -179,6 +202,8 @@ def launch_setup(context, *args, **kwargs):
         joint_state_broadcaster_spawner,
         delay_rviz_after_joint_state_broadcaster_spawner,
         robot_traj_controller_spawner,
+        cartesian_motion_controller_spawner,
+        motion_control_handle_spawner,
     ]
 
 

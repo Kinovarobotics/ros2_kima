@@ -1,0 +1,7 @@
+# Source dependencies that are not released as ROS 2 Jazzy binaries.
+# Everything else is installed by rosdep.
+repositories:
+  cartesian_controllers:
+    type: git
+    url: https://github.com/fzi-forschungszentrum-informatik/cartesian_controllers.git
+    version: ros2

@@ -19,9 +19,9 @@ This repository provides the ros2_control hardware interface, robot description 
 
 If you want to build this repository from source or contribute back to the repository read on.
 
-1. Make sure that `colcon` and its extensions are installed:
+1. Make sure that `colcon`, its extensions, and `vcs` are installed:
    ```
-   sudo apt install python3-colcon-common-extensions
+   sudo apt install python3-colcon-common-extensions python3-vcstool
    ```
 
 2. Create a new ROS2 workspace:
@@ -34,20 +34,23 @@ If you want to build this repository from source or contribute back to the repos
    ```
    cd $COLCON_WS
    git clone https://github.com/Kinovarobotics/ros2_kima.git src/ros2_kima
+   vcs import src --skip-existing --input src/ros2_kima/ros2_kima.jazzy.repos
    ```
 
-   All other dependencies (ros2_control, the controllers, gz_ros2_control, ros_gz) are released for Jazzy and are installed by `rosdep` in the next step.
+   `ros2_kima.jazzy.repos` only pulls the FZI `cartesian_controllers`, which are not released for Jazzy. All other dependencies (ros2_control, the controllers, gz_ros2_control, ros_gz, MoveIt) are released for Jazzy and are installed by `rosdep` in the next step.
 
 
 4. Install dependencies, compile, and source the workspace:
    ```
    rosdep install --ignore-src --from-paths src -y -r
-   colcon build --cmake-args -DCMAKE_BUILD_TYPE=Release
+   colcon build --packages-skip cartesian_controller_simulation cartesian_controller_tests --cmake-args -DCMAKE_BUILD_TYPE=Release
    ```
+
+   `cartesian_controller_simulation` (MuJoCo) and `cartesian_controller_tests` are part of the FZI repository but are not used here.
 
    By default, colcon will use as much resources as possible to build the ROS2 workspace. This can temporarily freeze or even crash your machine. You can limit the number of threads used to avoid this issue, we found a good tradeoff between build time and resource utilisation by setting it to 3 :
    ```
-   colcon build --cmake-args -DCMAKE_BUILD_TYPE=Release --parallel-workers 3
+   colcon build --packages-skip cartesian_controller_simulation cartesian_controller_tests --cmake-args -DCMAKE_BUILD_TYPE=Release --parallel-workers 3
    ```
 5. Source the previously built workspace using the following command:
    ```
@@ -154,6 +157,76 @@ ros2 run moveit_setup_assistant collisions_updater \
 ```
 
 The package can also be opened in the MoveIt Setup Assistant (`ros2 launch moveit_setup_assistant setup_assistant.launch.py`), which picks up `.setup_assistant`.
+
+### Cartesian motion controller
+
+`cartesian_motion_controller` ([FZI cartesian_controllers](https://github.com/fzi-forschungszentrum-informatik/cartesian_controllers)) moves `tool_frame` to a target pose. It is loaded inactive by `kima.launch.py` and `kortex_sim_control.launch.py`, together with `motion_control_handle`, an interactive marker in RViz whose pose is fed to the controller.
+
+The controller tracks the target pose it receives on `/cartesian_motion_controller/target_frame` (`geometry_msgs/msg/PoseStamped`). It keeps tracking the last target until a new one arrives. That target can come from the RViz handle or from a topic, but only one source should be active at a time.
+
+#### With the RViz handle
+
+Switch from the trajectory controller to Cartesian control with the handle:
+
+```bash
+ros2 control switch_controllers \
+  --activate cartesian_motion_controller motion_control_handle \
+  --deactivate joint_trajectory_controller
+```
+
+Then drag the `CartesianTarget` marker in RViz. The handle starts at the current tool pose, so the arm does not jump when it is activated.
+
+The marker is shown by the `CartesianTarget` display (Interactive Markers, namespace `/motion_control_handle`), which is already included in the RViz started by `kima.launch.py`, `kortex_sim_control.launch.py` and `kima_moveit_config robot.launch.py`. If RViz was launched with `launch_rviz:=false`, open it separately with the same configuration:
+
+```bash
+ros2 run rviz2 rviz2 -d $(ros2 pkg prefix --share kortex_description)/rviz/view_robot.rviz
+```
+
+With any other RViz configuration, add the display manually: **Add** > **By display type** > `rviz_default_plugins/InteractiveMarkers`, then set **Interactive Markers Namespace** to `/motion_control_handle`.
+
+The marker appears as soon as the handle is loaded, even while it is inactive. It only moves to the current tool pose, and only commands the arm, once `motion_control_handle` and `cartesian_motion_controller` are active.
+
+#### From a ROS 2 topic
+
+1. Switch to the Cartesian controller, and leave `motion_control_handle` inactive so it does not publish targets too:
+
+   ```bash
+   ros2 control switch_controllers --activate cartesian_motion_controller --deactivate joint_trajectory_controller
+   ```
+
+2. Read the current tool pose:
+
+   ```bash
+   ros2 run tf2_ros tf2_echo base_link tool_frame
+   ```
+
+   Note the `Translation` and the quaternion (xyzw).
+
+3. Publish the target pose. Edit the position, and paste the orientation read in step 2 unless you want the tool to rotate:
+
+   ```bash
+   ros2 topic pub --once -w 1 /cartesian_motion_controller/target_frame geometry_msgs/msg/PoseStamped \
+   "{header: {frame_id: base_link}, pose: {position: {x: <x>, y: <y>, z: <z>}, orientation: {x: <x>, y: <y>, z: <z>, w: <w>}}}"
+   ```
+
+   * `frame_id` must be exactly `base_link`. A target in any other frame is ignored, and the only sign is a warning in the controller's log.
+   * Positions are in metres, relative to `base_link`.
+   * `-w 1` waits until the controller is subscribed before sending, so the single message is not lost. `--once` is enough because the controller keeps tracking the last target.
+
+#### Switching back
+
+Switch back to the trajectory controller (needed for MoveIt and joint trajectories) with:
+
+```bash
+ros2 control switch_controllers \
+  --activate joint_trajectory_controller \
+  --deactivate cartesian_motion_controller motion_control_handle
+```
+
+Notes:
+* The controller has no velocity limit of its own: how fast the arm moves depends on how far the target is and on the gains in `kortex_description/arms/kima/7dof/config/ros2_controllers.yaml` (`solver.error_scale`, `pd_gains`). Start with small target steps on the real arm.
+* Activate it away from the straight-up zero pose, which is a kinematic singularity. Move the arm into a bent pose with the trajectory controller first.
+* The orientation in the target is followed too: a quaternion different from the current one rotates the tool.
 
 ## Clearing arm faults
 

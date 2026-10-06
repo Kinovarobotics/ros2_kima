@@ -206,13 +206,12 @@ The marker appears as soon as the handle is loaded, even while it is inactive. I
 
    ```bash
    ros2 topic pub --once -w 1 /cartesian_motion_controller/target_frame geometry_msgs/msg/PoseStamped \
-   "{header: {frame_id: base_link}, pose: {position: {x: 0.714, y: 0.0, z: 0.390}, orientation: {x: 0.0, y: 0.949, z: 0.0, w: 0.315}}}"
+   "{header: {frame_id: base_link}, pose: {position: {x: <x>, y: <y>, z: <z>}, orientation: {x: <x>, y: <y>, z: <z>, w: <w>}}}"
    ```
 
    * `frame_id` must be exactly `base_link`. A target in any other frame is ignored, and the only sign is a warning in the controller's log.
    * Positions are in metres, relative to `base_link`.
    * `-w 1` waits until the controller is subscribed before sending, so the single message is not lost. `--once` is enough because the controller keeps tracking the last target.
-   * To stream poses from a script or teleoperation, publish continuously at a steady rate (50 to 100 Hz) instead of `--once`.
 
 #### Switching back
 

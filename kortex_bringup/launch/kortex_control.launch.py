@@ -82,7 +82,9 @@ def launch_setup(context, *args, **kwargs):
             " ",
         ]
     )
-    robot_description = {"robot_description": ParameterValue(robot_description_content, value_type=str)}
+    robot_description = {
+        "robot_description": ParameterValue(robot_description_content, value_type=str)
+    }
 
     robot_controllers = PathJoinSubstitution(
         [
@@ -213,9 +215,7 @@ def generate_launch_description():
     declared_arguments = []
     # Robot specific arguments
     declared_arguments.append(
-        DeclareLaunchArgument(
-            "robot_type", description="Type/series of robot.", choices=["kima"]
-        )
+        DeclareLaunchArgument("robot_type", description="Type/series of robot.", choices=["kima"])
     )
     declared_arguments.append(DeclareLaunchArgument("dof", description="DoF of robot."))
     declared_arguments.append(

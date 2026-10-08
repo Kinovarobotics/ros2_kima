@@ -160,9 +160,8 @@ struct RclRobotDriver::Impl
       // before they drop. Asking again finds no actuator in fault and releases
       // the arm, so retry that one case a few times.
       rcl::Result res = rcl->Robot().ClearArmFaults(kArm);
-      for (int attempt = 2;
-           !res && res.error_code == rcl::ErrorCode::ArmFaultClearIncomplete &&
-           attempt <= kClearAttempts;
+      for (int attempt = 2; !res && res.error_code == rcl::ErrorCode::ArmFaultClearIncomplete &&
+                            attempt <= kClearAttempts;
            ++attempt)
       {
         std::this_thread::sleep_for(kClearRetryDelay);
@@ -234,8 +233,7 @@ struct RclRobotDriver::Impl
     }
     for (std::size_t i = 0; i < g_max_number_of_actuators; ++i)
     {
-      cmd_deg[i].store(
-        feedback.cyclic_data.joints[i].joint_position, std::memory_order_relaxed);
+      cmd_deg[i].store(feedback.cyclic_data.joints[i].joint_position, std::memory_order_relaxed);
     }
 
     const rcl::Result mode = setRealtimeMode();
@@ -269,11 +267,11 @@ struct RclRobotDriver::Impl
 
     // Cheapest place to track the arm's fault state: read() needs it every
     // cycle and this snapshot is already in hand.
-    arm_faulted.store(
-      arm.feedback->status.state == ArmState::Fault, std::memory_order_relaxed);
+    arm_faulted.store(arm.feedback->status.state == ArmState::Fault, std::memory_order_relaxed);
 
-    if (rt_active.load(std::memory_order_relaxed) &&
-        arm.feedback->status.mode == ArmMode::RealTimeJointPosition)
+    if (
+      rt_active.load(std::memory_order_relaxed) &&
+      arm.feedback->status.mode == ArmMode::RealTimeJointPosition)
     {
       arm.joint_command->mode = JointModeOfOperation::Position;
       for (std::size_t i = 0; i < g_max_number_of_actuators; ++i)
@@ -311,8 +309,7 @@ struct RclRobotDriver::Impl
 RclRobotDriver::RclRobotDriver() : impl_(std::make_unique<Impl>()) {}
 RclRobotDriver::~RclRobotDriver() = default;
 
-std::string RclRobotDriver::init(
-  const std::string & ethercat_lib_path, int net_cpu, int ctrl_cpu)
+std::string RclRobotDriver::init(const std::string & ethercat_lib_path, int net_cpu, int ctrl_cpu)
 {
   try
   {
@@ -320,8 +317,7 @@ std::string RclRobotDriver::init(
       .network_thread_cpu_core = net_cpu,
       .control_thread_cpu_core = ctrl_cpu,
     };
-    impl_->rcl =
-      std::make_unique<RobotControlLibrary>(EtherLabConfig{ethercat_lib_path}, affinity);
+    impl_->rcl = std::make_unique<RobotControlLibrary>(EtherLabConfig{ethercat_lib_path}, affinity);
   }
   catch (const RclException & ex)
   {
@@ -345,8 +341,7 @@ std::string RclRobotDriver::init(
   }
 
   impl_->system_faulted.store(false);
-  impl_->rcl->RegisterSystemFaultCallback(
-    [impl]() { impl->system_faulted.store(true); });
+  impl_->rcl->RegisterSystemFaultCallback([impl]() { impl->system_faulted.store(true); });
 
   impl_->startWorker();
 
@@ -394,7 +389,8 @@ std::string RclRobotDriver::setNoTool()
   tool.transform[3][3] = 1.0;
   const std::vector<ToolConfiguration> tools{tool};
   return ToError(
-    "SetPhysicalToolsConfiguration", impl_->rcl->Robot().SetPhysicalToolsConfiguration(kArm, tools));
+    "SetPhysicalToolsConfiguration",
+    impl_->rcl->Robot().SetPhysicalToolsConfiguration(kArm, tools));
 }
 
 std::string RclRobotDriver::startCyclic()
@@ -440,8 +436,8 @@ std::string RclRobotDriver::waitForFeedback(std::chrono::milliseconds timeout)
     const double p = feedback.cyclic_data.joints[i].joint_position;
     if (!std::isfinite(p) || std::fabs(p) > 3600.0)
     {
-      return "Implausible feedback after start: joint " + std::to_string(i + 1) +
-             " position " + std::to_string(p) + " deg";
+      return "Implausible feedback after start: joint " + std::to_string(i + 1) + " position " +
+             std::to_string(p) + " deg";
     }
   }
   return {};
@@ -531,10 +527,7 @@ void RclRobotDriver::seedCommand(const double * position_deg, std::size_t n)
   }
 }
 
-bool RclRobotDriver::isSystemFaulted() const
-{
-  return impl_->system_faulted.load();
-}
+bool RclRobotDriver::isSystemFaulted() const { return impl_->system_faulted.load(); }
 
 bool RclRobotDriver::armFaultLatched() const
 {
@@ -679,9 +672,8 @@ std::string RclRobotDriver::getFaultBanks() const
     }
     out << "  actuator " << (i + 1) << ": a=0x" << std::hex << j.fault_bank_a << " b=0x"
         << j.fault_bank_b << " c=0x" << j.fault_bank_c << " d=0x" << j.fault_bank_d << std::dec
-        << " (sto=" << (j.sto_activated ? "1" : "0")
-        << " brakes=" << (j.brakes_engaged ? "1" : "0") << " V=" << j.voltage
-        << " I=" << j.current << ")\n";
+        << " (sto=" << (j.sto_activated ? "1" : "0") << " brakes=" << (j.brakes_engaged ? "1" : "0")
+        << " V=" << j.voltage << " I=" << j.current << ")\n";
   }
 
   const std::string banks = out.str();

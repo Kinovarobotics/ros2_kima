@@ -1,0 +1,15 @@
+# Opens pull requests when the GitHub Actions used by the workflows in
+# .github/workflows get new versions, so the CI does not break on deprecated ones.
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    commit-message:
+      prefix: "ci"
+    # Group all action updates of a week into a single pull request.
+    groups:
+      github-actions:
+        patterns:
+          - "*"

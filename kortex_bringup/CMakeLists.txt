@@ -14,4 +14,14 @@ install(DIRECTORY config launch
   DESTINATION share/${PROJECT_NAME}
 )
 
+if(BUILD_TESTING)
+  find_package(launch_testing_ament_cmake REQUIRED)
+  # Mock-hardware integration test. It gets its own ROS domain, limited to this
+  # host, so it cannot interfere with other tests or with a real arm launch.
+  add_launch_test(test/test_kima_mock_bringup.py
+    TIMEOUT 400
+    ENV ROS_DOMAIN_ID=61 ROS_AUTOMATIC_DISCOVERY_RANGE=LOCALHOST
+  )
+endif()
+
 ament_package()

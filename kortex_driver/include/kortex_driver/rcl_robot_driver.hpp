@@ -68,11 +68,11 @@ public:
   /** Outcome of an asynchronous clear-faults request. */
   enum class ClearFaultsResult : std::uint8_t
   {
-    Idle,     ///< No request has been made since the last one was collected.
-    Pending,  ///< A clear sequence is running on the worker thread.
-    Success,  ///< Faults cleared, real-time mode re-entered, and the arm stayed enabled.
+    Idle,        ///< No request has been made since the last one was collected.
+    Pending,     ///< A clear sequence is running on the worker thread.
+    Success,     ///< Faults cleared, real-time mode re-entered, and the arm stayed enabled.
     NotFaulted,  ///< RCL refused the request: the arm was not in Fault, so there was nothing to clear.
-    Failure,  ///< Faults remained, re-entering real-time mode failed, or the arm faulted again.
+    Failure,     ///< Faults remained, re-entering real-time mode failed, or the arm faulted again.
   };
 
   /** Expected arm identity, validated by the bus scan. */

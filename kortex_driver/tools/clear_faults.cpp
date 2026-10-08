@@ -49,11 +49,16 @@ const char * StateName(ArmState s)
 {
   switch (s)
   {
-    case ArmState::Fault: return "Fault";
-    case ArmState::EmergencyBrakeRelease: return "EmergencyBrakeRelease";
-    case ArmState::OperationEnabled: return "OperationEnabled";
-    case ArmState::Idle: return "Idle";
-    default: return "other";
+    case ArmState::Fault:
+      return "Fault";
+    case ArmState::EmergencyBrakeRelease:
+      return "EmergencyBrakeRelease";
+    case ArmState::OperationEnabled:
+      return "OperationEnabled";
+    case ArmState::Idle:
+      return "Idle";
+    default:
+      return "other";
   }
 }
 
@@ -154,12 +159,12 @@ int main(int argc, char ** argv)
     // they drop. Asking again finds no actuator in fault and releases the arm,
     // so retry that one case a few times.
     Result clear = rcl.Robot().ClearArmFaults(RobotArm::Arm1);
-    for (int attempt = 2;
-         !clear && clear.error_code == ErrorCode::ArmFaultClearIncomplete && attempt <= kClearAttempts;
+    for (int attempt = 2; !clear && clear.error_code == ErrorCode::ArmFaultClearIncomplete &&
+                          attempt <= kClearAttempts;
          ++attempt)
     {
-      std::cout << "ClearArmFaults: " << clear.description.data() << " Retrying (" << attempt
-                << "/" << kClearAttempts << ")...\n";
+      std::cout << "ClearArmFaults: " << clear.description.data() << " Retrying (" << attempt << "/"
+                << kClearAttempts << ")...\n";
       std::this_thread::sleep_for(kClearRetryDelay);
       clear = rcl.Robot().ClearArmFaults(RobotArm::Arm1);
     }

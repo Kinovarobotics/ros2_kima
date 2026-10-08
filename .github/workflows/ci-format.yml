@@ -1,0 +1,27 @@
+# Runs the hooks of .pre-commit-config.yaml that do not need a ROS environment.
+# The ament_* hooks are declared for the commit stage only and are skipped here by
+# running the manual stage, as in Kinovarobotics/ros2_kortex (jazzy).
+name: Format
+
+on:
+  workflow_dispatch:
+  pull_request:
+  push:
+    branches:
+      - main
+      - main_dev
+
+jobs:
+  pre-commit:
+    name: Format
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install system hooks
+        run: sudo apt-get install -qq clang-format-14
+      - uses: pre-commit/action@v3.0.1
+        with:
+          extra_args: --all-files --hook-stage manual

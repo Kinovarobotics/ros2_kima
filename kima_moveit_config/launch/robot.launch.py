@@ -2,7 +2,8 @@
 #
 # This software may be modified and distributed under the terms of the
 # BSD 3-Clause license. Refer to the LICENSE file for details.
-"""MoveIt for the KIMA arm.
+"""
+MoveIt for the KIMA arm.
 
 Brings up the arm with the regular bringup (real hardware over EtherCAT, mock
 hardware, or Gazebo) and adds move_group plus RViz with the MotionPlanning panel.

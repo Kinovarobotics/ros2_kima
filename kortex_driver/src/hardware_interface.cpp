@@ -75,8 +75,9 @@ std::string DefaultTopologyFile()
   catch (const std::exception & ex)
   {
     RCLCPP_WARN(
-      LOGGER, "Could not locate the kinova_rcl_vendor share directory: %s. Set the "
-              "'network_topology_file' hardware parameter explicitly.",
+      LOGGER,
+      "Could not locate the kinova_rcl_vendor share directory: %s. Set the "
+      "'network_topology_file' hardware parameter explicitly.",
       ex.what());
     return {};
   }
@@ -149,8 +150,9 @@ CallbackReturn KortexMultiInterfaceHardware::on_init(const hardware_interface::H
   //     position/velocity/effort state; no gripper) ---
   for (const hardware_interface::ComponentInfo & joint : info_.joints)
   {
-    if (joint.command_interfaces.size() != 1 ||
-        joint.command_interfaces[0].name != hardware_interface::HW_IF_POSITION)
+    if (
+      joint.command_interfaces.size() != 1 ||
+      joint.command_interfaces[0].name != hardware_interface::HW_IF_POSITION)
     {
       RCLCPP_FATAL(
         LOGGER, "Joint '%s' must have exactly one '%s' command interface.", joint.name.c_str(),
@@ -160,9 +162,10 @@ CallbackReturn KortexMultiInterfaceHardware::on_init(const hardware_interface::H
 
     for (const auto & si : joint.state_interfaces)
     {
-      if (si.name != hardware_interface::HW_IF_POSITION &&
-          si.name != hardware_interface::HW_IF_VELOCITY &&
-          si.name != hardware_interface::HW_IF_EFFORT)
+      if (
+        si.name != hardware_interface::HW_IF_POSITION &&
+        si.name != hardware_interface::HW_IF_VELOCITY &&
+        si.name != hardware_interface::HW_IF_EFFORT)
       {
         RCLCPP_FATAL(
           LOGGER, "Joint '%s' has unsupported state interface '%s'. Expected %s, %s, or %s.",
@@ -202,8 +205,8 @@ CallbackReturn KortexMultiInterfaceHardware::on_configure(
 
   driver_ = std::make_unique<RclRobotDriver>();
 
-  std::string err = driver_->init(
-    ethercat_lib_path_, network_thread_cpu_core_, control_thread_cpu_core_);
+  std::string err =
+    driver_->init(ethercat_lib_path_, network_thread_cpu_core_, control_thread_cpu_core_);
   if (!err.empty())
   {
     RCLCPP_ERROR(LOGGER, "%s", err.c_str());
@@ -247,9 +250,9 @@ CallbackReturn KortexMultiInterfaceHardware::on_configure(
     {
       const std::string fault = driver_->getSystemFaultDescription();
       RCLCPP_WARN(
-        LOGGER, "ScanNetwork returned success but the system is not in Standby (attempt %d/%d).%s%s",
-        attempt, kMaxScanAttempts, fault.empty() ? "" : " Latched system fault:\n",
-        fault.c_str());
+        LOGGER,
+        "ScanNetwork returned success but the system is not in Standby (attempt %d/%d).%s%s",
+        attempt, kMaxScanAttempts, fault.empty() ? "" : " Latched system fault:\n", fault.c_str());
     }
     else
     {

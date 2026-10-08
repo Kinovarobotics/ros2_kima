@@ -143,5 +143,6 @@ repos:
     rev: v2.1.0
     hooks:
       - id: codespell
-        args: ['--write-changes']
+        # reenable: RclRobotDriver::Impl::reenable(), not a misspelling.
+        args: ['--write-changes', '--ignore-words-list=reenable']
         exclude: CHANGELOG\.rst|\.(svg|pyc|drawio)$

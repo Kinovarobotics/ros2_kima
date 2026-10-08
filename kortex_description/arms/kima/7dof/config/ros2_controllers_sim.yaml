@@ -1,10 +1,8 @@
 # Controllers for the Gazebo simulation (kortex_sim_control.launch.py).
 #
 # Same trajectory controller as the real arm (ros2_controllers.yaml),
-# plus the Cartesian motion controller, minus the controllers that need
-# interfaces only the KIMA EtherCAT driver exports:
-#   - fault_controller claims reset_fault/*
-#   - twist_controller claims tcp/twist.*
+# plus the Cartesian motion controller, minus fault_controller, which claims the
+# reset_fault/* interfaces that only the KIMA EtherCAT driver exports.
 # gz_ros2_control loads this file through the <gazebo> plugin in kinova.urdf.xacro.
 controller_manager:
   ros__parameters:

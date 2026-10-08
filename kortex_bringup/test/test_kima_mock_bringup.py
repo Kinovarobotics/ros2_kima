@@ -158,7 +158,6 @@ class TestKimaMockBringup(unittest.TestCase):
                 "joint_trajectory_controller": "active",
                 "cartesian_motion_controller": "inactive",
                 "motion_control_handle": "inactive",
-                "twist_controller": "inactive",
             }
         )
         # fault_controller needs the real driver's reset_fault interfaces and is

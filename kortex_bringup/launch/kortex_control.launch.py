@@ -47,7 +47,6 @@ def launch_setup(context, *args, **kwargs):
     use_fake_hardware = LaunchConfiguration("use_fake_hardware")
     fake_sensor_commands = LaunchConfiguration("fake_sensor_commands")
     robot_traj_controller = LaunchConfiguration("robot_controller")
-    robot_pos_controller = LaunchConfiguration("robot_pos_controller")
     fault_controller = LaunchConfiguration("fault_controller")
     launch_rviz = LaunchConfiguration("launch_rviz")
 
@@ -158,12 +157,6 @@ def launch_setup(context, *args, **kwargs):
         arguments=[robot_traj_controller, "-c", controller_manager_name],
     )
 
-    robot_pos_controller_spawner = Node(
-        package="controller_manager",
-        executable="spawner",
-        arguments=[robot_pos_controller, "--inactive", "-c", controller_manager_name],
-    )
-
     # Cartesian pose tracking (FZI cartesian_controllers), loaded inactive: switch
     # to it from joint_trajectory_controller when needed. The handle is an RViz
     # interactive marker; its target pose is remapped straight onto the
@@ -202,7 +195,6 @@ def launch_setup(context, *args, **kwargs):
         joint_state_broadcaster_spawner,
         delay_rviz_after_joint_state_broadcaster_spawner,
         robot_traj_controller_spawner,
-        robot_pos_controller_spawner,
         cartesian_motion_controller_spawner,
         motion_control_handle_spawner,
         fault_controller_spawner,
@@ -317,13 +309,6 @@ def generate_launch_description():
         DeclareLaunchArgument(
             "robot_controller",
             default_value="joint_trajectory_controller",
-            description="Robot controller to start.",
-        )
-    )
-    declared_arguments.append(
-        DeclareLaunchArgument(
-            "robot_pos_controller",
-            default_value="twist_controller",
             description="Robot controller to start.",
         )
     )

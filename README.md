@@ -93,7 +93,7 @@ You can specify the following arguments if you wish to change your arm configura
 
 * `fake_sensor_commands` : Enable fake command interfaces for sensors used for simple simulations. Used only if 'use_fake_hardware' parameter is true. Default value is `false`.
 
-* `robot_controller` : Robot controller to start. Possible values are `twist_controller` and `joint_trajectory_controller`.Default value is `joint_trajectory_controller`.
+* `robot_controller` : Robot controller to start. Default value is `joint_trajectory_controller`.
 
 * `controllers_file` : Ros 2 control configuration file to use. Default value is `ros2_controllers.yaml`
 
@@ -115,7 +115,7 @@ This starts Gazebo, spawns the arm and activates `joint_state_broadcaster` and `
 
 * `controllers_file` : Controllers configuration, in `kortex_description/arms/kima/7dof/config/`. Default value is `ros2_controllers_sim.yaml`.
 
-In simulation, `gz_ros2_control` replaces the EtherCAT driver, so the fault controller and the twist controller are not available. They need interfaces that only the real driver provides.
+In simulation, `gz_ros2_control` replaces the EtherCAT driver, so the fault controller is not available. It needs interfaces that only the real driver provides.
 
 ### MoveIt
 
@@ -277,34 +277,4 @@ ros2 topic pub /joint_trajectory_controller/joint_trajectory trajectory_msgs/Joi
     { positions: [0, 0, 0, 0, 0, 0, 0], time_from_start: { sec: 10 } },
   ]
 }" -1
-```
-
-You can also command the arm using Twist messages. Before doing so, you must active the `twist_controller` and deactivate the `joint_trajectory_controller`:
-```bash
-ros2 service call /controller_manager/switch_controller controller_manager_msgs/srv/SwitchController "{
-  activate_controllers: [twist_controller],
-  deactivate_controllers: [joint_trajectory_controller],
-  strictness: 1,
-  activate_asap: true,
-}"
-```
-
-Once the `twist_controller` is activated, you can publish Twist messages on the `/twist_controller/commands` topic to command the arm.
-
-For example, you can jog the arm using [Teleop Twist Keyboard](https://index.ros.org/p/teleop_twist_keyboard/github-ros2-teleop_twist_keyboard/) with the following command:
-
-**WARNING: you are responsible for collision checking, including self collisions when in this mode.**
-
-```bash
-ros2 run teleop_twist_keyboard teleop_twist_keyboard --ros-args --remap /cmd_vel:=/twist_controller/commands
-```
-
-If you wish to use the `joint_trajectory_controller` again to command the arm using JointTrajectory messages, run the following:
-```bash
-ros2 service call /controller_manager/switch_controller controller_manager_msgs/srv/SwitchController "{
-  activate_controllers: [joint_trajectory_controller],
-  deactivate_controllers: [twist_controller],
-  strictness: 1,
-  activate_asap: true,
-}"
 ```

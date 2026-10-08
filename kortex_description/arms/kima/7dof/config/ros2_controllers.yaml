@@ -8,9 +8,6 @@
     joint_trajectory_controller:
       type: joint_trajectory_controller/JointTrajectoryController
 
-    twist_controller:
-      type: picknik_twist_controller/PicknikTwistController
-
     fault_controller:
       type: picknik_reset_fault_controller/PicknikResetFaultController
 
@@ -42,16 +39,6 @@
       stopped_velocity_tolerance: 0.0
       goal_time: 0.0
 
-/twist_controller:
-  ros__parameters:
-    joint: tcp
-    interface_names:
-      - twist.linear.x
-      - twist.linear.y
-      - twist.linear.z
-      - twist.angular.x
-      - twist.angular.y
-      - twist.angular.z
 
 /cartesian_motion_controller:
   ros__parameters:

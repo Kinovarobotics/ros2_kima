@@ -74,7 +74,7 @@ struct RclRobotDriver::Impl
   std::unique_ptr<RobotControlLibrary> rcl;
 
   // Command bridge: latest commanded joint positions [deg]. Lock-free on
-  // x86-64, so safe to load/store from the real-time control thread.
+  // x86-64 and aarch64, so safe to load/store from the real-time control thread.
   std::array<std::atomic<double>, kMaxJoints> cmd_deg;
 
   // True while the arm is expected to be in RealTimeJointPosition mode.

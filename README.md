@@ -8,7 +8,7 @@ This repository provides the ros2_control hardware interface, robot description 
 
 1. Install ROS 2.
 
-   This repository targets ROS 2 Jazzy on Ubuntu 24.04. The vendored Robot Control Library is only published for Linux x86_64 with the gcc-13 ABI.
+   This repository targets ROS 2 Jazzy on Ubuntu 24.04. The vendored Robot Control Library is only published for Linux x86_64 and arm64 with the gcc-13 ABI.
 
    Stable LTS release: [Install ROS 2 Jazzy](https://docs.ros.org/en/jazzy/Installation/Ubuntu-Install-Debs.html)
 

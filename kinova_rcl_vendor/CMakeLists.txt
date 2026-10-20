@@ -6,25 +6,39 @@ find_package(ament_cmake REQUIRED)
 include(FetchContent)
 
 # --- Released SDK tarball ----------------------------------------------------
-# Bump all three together when moving to a new RCL build. Get the hash with:
+# Bump the version and every per-architecture hash together when moving to a
+# new RCL build. Get each hash with:
 #   curl -sSL <url> | sha256sum
 set(KINOVA_RCL_VERSION "0.1.0-dev.127"
   CACHE STRING "Kinova RCL release to vendor.")
-set(KINOVA_RCL_URL
-  "https://artifactory.kinovaapps.com/artifactory/generic-local-public/kima/robot_control_library/development/0.1.0-dev/127/robot_control_library_linux_x86_gcc13_release_0.1.0-dev.127.tar.gz"
-  CACHE STRING "Download URL for the Kinova RCL release tarball.")
-set(KINOVA_RCL_SHA256
-  "a48a0f8d97c6cb1bb2d67bdef41f2473dcf426dfba29f77bf6632b8f2c001612"
-  CACHE STRING "Expected SHA256 of the Kinova RCL release tarball.")
+set(_rcl_base_url
+  "https://artifactory.kinovaapps.com/artifactory/generic-local-public/kima/robot_control_library/development/0.1.0-dev/127")
 
-# The published archive is built for Linux x86_64 against the gcc-13 (new
-# __cxx11) ABI. No other platform build is available, so fail loudly rather
-# than produce a driver that cannot link.
-if(NOT CMAKE_SYSTEM_NAME STREQUAL "Linux" OR NOT CMAKE_SYSTEM_PROCESSOR STREQUAL "x86_64")
+# The published archives are built for Linux x86_64 and arm64 against the
+# gcc-13 (new __cxx11) ABI. No other platform build is available, so fail
+# loudly rather than produce a driver that cannot link.
+if(NOT CMAKE_SYSTEM_NAME STREQUAL "Linux")
   message(FATAL_ERROR
-    "Kinova RCL is only published for Linux x86_64 (gcc-13 ABI). "
+    "Kinova RCL is only published for Linux (gcc-13 ABI). "
     "Detected ${CMAKE_SYSTEM_NAME}/${CMAKE_SYSTEM_PROCESSOR}.")
 endif()
+if(CMAKE_SYSTEM_PROCESSOR STREQUAL "x86_64")
+  set(_rcl_arch "x86")
+  set(_rcl_sha256 "a48a0f8d97c6cb1bb2d67bdef41f2473dcf426dfba29f77bf6632b8f2c001612")
+elseif(CMAKE_SYSTEM_PROCESSOR MATCHES "^(aarch64|arm64)$")
+  set(_rcl_arch "arm64")
+  set(_rcl_sha256 "e09469f0baec8fb74bf775b8820c4cf7f5978e764fbb5b4b6091a0d196105ef0")
+else()
+  message(FATAL_ERROR
+    "Kinova RCL is only published for Linux x86_64 and arm64 (gcc-13 ABI). "
+    "Detected ${CMAKE_SYSTEM_NAME}/${CMAKE_SYSTEM_PROCESSOR}.")
+endif()
+
+set(KINOVA_RCL_URL
+  "${_rcl_base_url}/robot_control_library_linux_${_rcl_arch}_gcc13_release_${KINOVA_RCL_VERSION}.tar.gz"
+  CACHE STRING "Download URL for the Kinova RCL release tarball.")
+set(KINOVA_RCL_SHA256 "${_rcl_sha256}"
+  CACHE STRING "Expected SHA256 of the Kinova RCL release tarball.")
 
 # CMP0135: use download time, not archive time, for extracted file timestamps —
 # otherwise a re-download does not retrigger dependent builds.

@@ -12,8 +12,8 @@
   <maintainer email="tbd@todo.invalid">TBD</maintainer>
 
   <!-- The vendored SDK is covered by the Kinova RCL EULA, installed to
-       share/kinova_rcl_vendor/. This package's own build files are BSD. -->
-  <license>BSD</license>
+       share/kinova_rcl_vendor/. This package's own build files are Apache-2.0. -->
+  <license>Apache-2.0</license>
 
   <buildtool_depend>ament_cmake</buildtool_depend>
 

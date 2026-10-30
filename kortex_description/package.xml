@@ -11,7 +11,7 @@ for KINOVA KORTEX™ arms</p>
   <author email="avannobel@kinova.ca">Alexandre Vannobel</author>
   <maintainer email="avannobel@kinova.ca" />
   <maintainer email="marq.rasmussen@picknik.ai">Marq Rasmussen</maintainer>
-  <license>BSD</license>
+  <license>Apache-2.0</license>
 
   <buildtool_depend>ament_cmake</buildtool_depend>
 

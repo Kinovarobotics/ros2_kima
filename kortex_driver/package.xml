@@ -7,7 +7,7 @@
   <maintainer email="alex.moriarty@picknik.ai">Alex Moriarty</maintainer>
   <maintainer email="mleroux@kinova.ca">Martin Leroux</maintainer>
   <maintainer email="marq.rasmussen@picknik.ai">Marq Rasmussen</maintainer>
-  <license>BSD</license>
+  <license>Apache-2.0</license>
 
   <buildtool_depend>ament_cmake</buildtool_depend>
 

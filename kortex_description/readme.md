@@ -3,8 +3,7 @@
 *
 * Copyright (c) 2018 Kinova inc. All rights reserved.
 *
-* This software may be modified and distributed
-* under the terms of the BSD 3-Clause license.
+* Licensed under the Apache License, Version 2.0.
 *
 * Refer to the LICENSE file for details.
 *

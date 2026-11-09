@@ -9,10 +9,10 @@ include(FetchContent)
 # Bump the version and every per-architecture hash together when moving to a
 # new RCL build. Get each hash with:
 #   curl -sSL <url> | sha256sum
-set(KINOVA_RCL_VERSION "0.1.0-dev.127"
+set(KINOVA_RCL_VERSION "0.1.0-r.3"
   CACHE STRING "Kinova RCL release to vendor.")
 set(_rcl_base_url
-  "https://artifactory.kinovaapps.com/artifactory/generic-local-public/kima/robot_control_library/development/0.1.0-dev/127")
+  "https://artifactory.kinovaapps.com/artifactory/generic-public/kima/robot_control_library/release/0.1.0-r/3")
 
 # The published archives are built for Linux x86_64 and arm64 against the
 # gcc-13 (new __cxx11) ABI. No other platform build is available, so fail
@@ -24,10 +24,10 @@ if(NOT CMAKE_SYSTEM_NAME STREQUAL "Linux")
 endif()
 if(CMAKE_SYSTEM_PROCESSOR STREQUAL "x86_64")
   set(_rcl_arch "x86")
-  set(_rcl_sha256 "a48a0f8d97c6cb1bb2d67bdef41f2473dcf426dfba29f77bf6632b8f2c001612")
+  set(_rcl_sha256 "b9d6529dcecf2aba0789e41c885ca6b4ba441e9b8097945c66292f24dd3759cd")
 elseif(CMAKE_SYSTEM_PROCESSOR MATCHES "^(aarch64|arm64)$")
   set(_rcl_arch "arm64")
-  set(_rcl_sha256 "e09469f0baec8fb74bf775b8820c4cf7f5978e764fbb5b4b6091a0d196105ef0")
+  set(_rcl_sha256 "88f369e6be2c95613e172a54a404d41b77f295b5ec5477223bec370d6c3c8aae")
 else()
   message(FATAL_ERROR
     "Kinova RCL is only published for Linux x86_64 and arm64 (gcc-13 ABI). "

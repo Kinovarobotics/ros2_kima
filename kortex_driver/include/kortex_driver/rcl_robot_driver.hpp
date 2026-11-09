@@ -52,13 +52,12 @@ public:
   /**
    * @brief Coarse RCL system state, mirrored here so this header stays RCL-free.
    *
-   * Values match rcl::api::RclSystemState; Unknown is returned when the state
-   * cannot be read (e.g. before init()).
+   * Mirrors rcl::api::SystemState; Unknown is returned before init().
    */
   enum class SystemState : std::uint8_t
   {
     Initialization,
-    Standby,
+    Configuration,
     Maintenance,
     Operational,
     Fault,
@@ -75,15 +74,28 @@ public:
     Failure,     ///< Faults remained, re-entering real-time mode failed, or the arm faulted again.
   };
 
+  /** Control mode of one joint in real-time joint control. */
+  enum class JointMode : std::uint8_t
+  {
+    Position,
+    Velocity,
+    Torque,
+  };
+
+  /** Outcome of an asynchronous joint-mode change. */
+  enum class ModeSwitchResult : std::uint8_t
+  {
+    Idle,     ///< No request has been made since the last one was collected.
+    Pending,  ///< The arm is being re-enabled in the requested modes.
+    Success,  ///< The arm is in real-time control in the requested modes and stayed enabled.
+    Failure,  ///< The change failed; every joint fell back to position control.
+  };
+
   /** Expected arm identity, validated by the bus scan. */
   struct ArmIdentity
   {
     std::string part_number;
-    std::string part_number_revision;
-    std::string serial_number;
     std::uint32_t nb_actuators{7};
-    std::uint16_t slave_pos_min{0};
-    std::uint16_t slave_pos_max{13};
   };
 
   RclRobotDriver();
@@ -99,21 +111,28 @@ public:
    *        register the real-time control bridge + system-fault hook.
    *
    * @param ethercat_lib_path Path to the EtherCAT master shared library.
+   * @param topology_content  Content of the network topology file.
+   * @param arm      Arm expected on the bus.
    * @param net_cpu  0-based core for the network cyclic thread, or -1 (unpinned).
    * @param ctrl_cpu 0-based core for the arms-control thread, or -1 (unpinned).
+   * @param torque_gravity_compensated When true a torque command is added to the
+   *        model's static torque, so 0 Nm makes the joint float. When false it is
+   *        sent as the total joint torque.
    */
-  std::string init(const std::string & ethercat_lib_path, int net_cpu, int ctrl_cpu);
+  std::string init(
+    const std::string & ethercat_lib_path, const std::string & topology_content,
+    const ArmIdentity & arm, int net_cpu, int ctrl_cpu, bool torque_gravity_compensated);
 
-  /** Scan the bus (Initialization -> Standby) and validate the expected arm. */
-  std::string scan(const std::string & topology_content, const ArmIdentity & arm);
+  /** Scan the bus (Initialization -> Configuration) and read the arm's limits. */
+  std::string scan();
 
-  /** Set the gravity vector used by the dynamics model (Standby only). */
+  /** Set the gravity vector used by the dynamics model (Configuration only). */
   std::string setGravity(double x, double y, double z);
 
-  /** Configure an identity, mass-less tool (Standby only). */
+  /** Configure an identity, mass-less tool (Configuration only). */
   std::string setNoTool();
 
-  /** Start cyclic exchange (Standby -> Operational). */
+  /** Start cyclic exchange (Configuration -> Operational). */
   std::string startCyclic();
 
   /**
@@ -126,11 +145,20 @@ public:
    */
   std::string waitForFeedback(std::chrono::milliseconds timeout);
 
-  /** Stop cyclic exchange (Operational -> Standby). */
+  /** Stop cyclic exchange (Operational -> Configuration). */
   std::string stopCyclic();
 
-  /** Enter real-time joint-position control mode. */
+  /** Enter real-time joint control with every joint in position mode. */
   std::string setRealtimeJointPositionMode();
+
+  /**
+   * @brief Bring the arm to rest in Standby ahead of a joint-mode change.
+   *
+   * A joint's mode can only change by selecting the arm mode again. Blocks until
+   * the arm has stopped, so it must not run on the real-time update loop. Follow
+   * it with requestModeSwitch().
+   */
+  std::string holdForModeSwitch();
 
   /** Leave real-time control (NoMode). */
   std::string setNoMode();
@@ -147,10 +175,21 @@ public:
     double * position_deg, double * velocity_deg, double * torque_nm, std::size_t n);
 
   /**
-   * @brief Publish the latest desired joint positions (degrees) for the
-   *        real-time control callback to consume. Thread-safe, non-blocking.
+   * @brief Publish the latest joint commands for the real-time control callback
+   *        to consume. Thread-safe, non-blocking.
+   *
+   * Each joint only follows the array matching its current JointMode. A NaN
+   * position keeps the previous command. A NaN velocity stops the joint and a NaN
+   * torque holds it against gravity.
+   *
+   * @param position_deg   Joint positions [deg]    (size >= n).
+   * @param velocity_deg_s Joint velocities [deg/s] (size >= n).
+   * @param torque_nm      Joint torques [Nm]       (size >= n).
+   * @param n              Number of joints (<= kMaxJoints).
    */
-  void setCommand(const double * position_deg, std::size_t n);
+  void setCommand(
+    const double * position_deg, const double * velocity_deg_s, const double * torque_nm,
+    std::size_t n);
 
   /** Seed the command buffer (degrees), e.g. right after activation. */
   void seedCommand(const double * position_deg, std::size_t n);
@@ -202,8 +241,9 @@ public:
   /**
    * @brief Request an asynchronous fault recovery on the worker thread.
    *
-   * Runs ClearArmFaults, then reseeds the command buffer from the live position,
-   * re-enters RealTimeJointPosition and checks the arm is still unfaulted after a
+   * Runs ClearFaults, then reseeds the command buffer from the live position,
+   * re-enters real-time control with every joint in position mode and checks the
+   * arm is still unfaulted after a
    * short settle window. Both RCL calls block (the re-enable for ~750 ms), which
    * must never happen on the controller_manager update loop. Returns immediately;
    * poll clearArmFaultsResult(). A request made while one is Pending is ignored.
@@ -228,6 +268,37 @@ public:
 
   /** Reset the clear-faults result back to Idle once it has been consumed. */
   void consumeClearArmFaultsResult();
+
+  /**
+   * @brief Request real-time control in @p modes on the worker thread.
+   *
+   * Call holdForModeSwitch() first. Returns immediately, so it is safe on the
+   * real-time update loop; poll modeSwitchResult().
+   *
+   * @param modes Requested mode per joint (size >= n).
+   * @param n     Number of joints (<= kMaxJoints); any others use position mode.
+   */
+  void requestModeSwitch(const JointMode * modes, std::size_t n);
+
+  /** Outcome of the latest requestModeSwitch(). */
+  ModeSwitchResult modeSwitchResult() const;
+
+  /** Reason for the latest mode-switch failure (empty on success). */
+  std::string modeSwitchMessage() const;
+
+  /** Reset the mode-switch result back to Idle once it has been consumed. */
+  void consumeModeSwitchResult();
+
+  /** Fill @p modes (size >= n) with the mode each joint is currently in. Lock-free. */
+  void getJointModes(JointMode * modes, std::size_t n) const;
+
+  /**
+   * @brief Number of velocity or torque commands changed to respect the arm's limits.
+   *
+   * Counts cycles where a command was clamped to the joint's velocity or torque
+   * limit or reduced near a position limit. Lock-free.
+   */
+  std::uint64_t limitedCommandCount() const;
 
 private:
   struct Impl;

@@ -57,6 +57,8 @@ const char * StateName(ArmState s)
       return "OperationEnabled";
     case ArmState::Idle:
       return "Idle";
+    case ArmState::FaultReaction:
+      return "FaultReaction";
     default:
       return "other";
   }
@@ -65,16 +67,16 @@ const char * StateName(ArmState s)
 void Report(RobotControlLibrary & rcl, const char * tag)
 {
   ArmFeedback fb;
-  Result r = rcl.Robot().GetArmFeedback(RobotArm::Arm1, fb);
+  Result r = rcl.Arm(ArmId::Arm1).GetFeedback(fb);
   if (!r)
   {
-    std::cout << "[" << tag << "] GetArmFeedback failed: " << r.description.data() << "\n";
+    std::cout << "[" << tag << "] GetFeedback failed: " << r.description.data() << "\n";
     return;
   }
   std::cout << "[" << tag << "] arm state: " << StateName(fb.status.state) << "\n";
 
   Fault fault;
-  if (rcl.Robot().GetArmFault(RobotArm::Arm1, fault) && !fault.IsEmpty())
+  if (rcl.Arm(ArmId::Arm1).GetFault(fault) && !fault.IsEmpty())
   {
     for (const auto & e : fault.Errors())
     {
@@ -85,7 +87,7 @@ void Report(RobotControlLibrary & rcl, const char * tag)
   bool any = false;
   for (std::size_t i = 0; i < g_max_number_of_actuators; ++i)
   {
-    const JointFeedback & j = fb.cyclic_data.joints[i];
+    const JointFeedback & j = fb.joints[i];
     if ((j.fault_bank_a | j.fault_bank_b | j.fault_bank_c | j.fault_bank_d) == 0U)
     {
       continue;
@@ -133,22 +135,23 @@ int main(int argc, char ** argv)
     return 2;
   }
 
-  LoggingApi{}.SetLoggingConfiguration(
-    LoggingConfiguration{.type = LoggingType::Console, .verbosity = LoggingVerbosity::Info});
-
   try
   {
-    RobotControlLibrary rcl{EtherLabConfig{"/usr/local/lib/libethercat.so"}};
+    ArmInformation arm;
+    arm.part_number = "ARM-L3M000-001";
+    arm.actuator_count = 7;
 
-    const std::vector<RobotArmInformation> arms{{
-      .m_part_number = "ARM-L3M000-001",
-      .m_part_number_revision = "A",
-      .m_serial_number = "0001",
-      .m_nb_actuators = 7,
-      .m_slave_pos_range = {0, 13},
-    }};
-    if (!Check(rcl.Network().ScanNetwork(arms, topology), "ScanNetwork")) return 1;
-    if (!Check(rcl.Network().StartCyclicCommunication(), "StartCyclicCommunication")) return 1;
+    Config config;
+    config.ecat_config = EtherLabConfig{"/usr/local/lib/libethercat.so"};
+    config.arms = {arm};
+    config.network_topology = topology;
+    config.logging.type = LoggingType::Console;
+    config.logging.verbosity = LoggingVerbosity::Info;
+
+    RobotControlLibrary rcl{config};
+
+    if (!Check(rcl.Network().Scan(), "Network Scan")) return 1;
+    if (!Check(rcl.Network().StartCyclic(), "StartCyclic")) return 1;
 
     // Let the first cyclic exchanges land so the latched fault is reported.
     std::this_thread::sleep_for(std::chrono::milliseconds{500});
@@ -158,22 +161,22 @@ int main(int argc, char ** argv)
     // already reads zero: RCL samples the actuators' fault-status bits before
     // they drop. Asking again finds no actuator in fault and releases the arm,
     // so retry that one case a few times.
-    Result clear = rcl.Robot().ClearArmFaults(RobotArm::Arm1);
+    Result clear = rcl.Arm(ArmId::Arm1).ClearFaults();
     for (int attempt = 2; !clear && clear.error_code == ErrorCode::ArmFaultClearIncomplete &&
                           attempt <= kClearAttempts;
          ++attempt)
     {
-      std::cout << "ClearArmFaults: " << clear.description.data() << " Retrying (" << attempt << "/"
+      std::cout << "ClearFaults: " << clear.description.data() << " Retrying (" << attempt << "/"
                 << kClearAttempts << ")...\n";
       std::this_thread::sleep_for(kClearRetryDelay);
-      clear = rcl.Robot().ClearArmFaults(RobotArm::Arm1);
+      clear = rcl.Arm(ArmId::Arm1).ClearFaults();
     }
-    std::cout << "ClearArmFaults: " << (clear ? "OK" : clear.description.data()) << "\n";
+    std::cout << "ClearFaults: " << (clear ? "OK" : clear.description.data()) << "\n";
 
     std::this_thread::sleep_for(std::chrono::milliseconds{500});
     Report(rcl, "after");
 
-    Check(rcl.Network().StopCyclicCommunication(), "StopCyclicCommunication");
+    Check(rcl.Network().StopCyclic(), "StopCyclic");
     return clear ? 0 : 1;
   }
   catch (const std::exception & ex)

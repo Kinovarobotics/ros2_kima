@@ -244,6 +244,31 @@ Notes:
 * Activate it away from the straight-up zero pose, which is a kinematic singularity. Move the arm into a bent pose with the trajectory controller first.
 * The orientation in the target is followed too: a quaternion different from the current one rotates the tool.
 
+### Joint velocity and effort control
+
+`forward_velocity_controller` and `forward_effort_controller` send one velocity (rad/s) or torque (Nm) per joint, straight to the actuators. Both are loaded inactive. They need actuator firmware 3.3 or later.
+
+```bash
+ros2 control switch_controllers \
+  --activate forward_velocity_controller \
+  --deactivate joint_trajectory_controller
+
+ros2 topic pub --once /forward_velocity_controller/commands std_msgs/msg/Float64MultiArray \
+  "{data: [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.05]}"
+```
+
+Use `/forward_effort_controller/commands` the same way for torque. Stop with a zero command, then switch back to `joint_trajectory_controller`.
+
+Notes:
+
+* The last command stays applied until a new one arrives, so a publisher that dies leaves the arm moving. Publish continuously from anything that is not supervised.
+* Changing a joint's mode stops the arm and re-enables it, so the switch takes a moment and motion is interrupted. The switch is refused while the arm is faulted. Exchanging controllers that use the same interface does not interrupt anything.
+* Until the first command arrives, a velocity joint stays still and an effort joint holds its own weight.
+* After `~/reset_fault` every joint returns to position control and holds its position. Deactivate and reactivate the velocity or effort controller to resume.
+* Velocity and torque commands are limited to the arm's own limits, and motion toward a position limit is ramped out over the last degrees. A warning is logged while this happens.
+* With the default `torque_gravity_compensation:=true` an effort command is added to the arm's model-estimated static torque, so 0 Nm floats the arm. Set it to `false` in `kortex.ros2_control.xacro` for a controller that computes the total joint torque itself. Gazebo always applies the total torque, so 0 Nm lets the simulated arm fall.
+* Effort commands have no tool model unless one is configured: a payload makes the arm sag.
+
 ## Clearing arm faults
 
 Actuator faults stay latched in the actuators across restarts: stopping the launch does not clear them. There are two ways to clear them.
@@ -279,8 +304,7 @@ Notes:
 * Only one program can hold the EtherCAT master at a time, so `ros2_control_node` must not be running.
 * The tool never enables the arm: it stays in `Idle` with its brakes engaged.
 * RCL sometimes reports `Fault clear incomplete: N actuator(s) still in fault` even though every fault bank already reads zero. The tool, like `~/reset_fault`, retries the clear up to 3 times in that case. If it still ends in `Fault`, run it again.
-* The expected arm identity (`ARM-L3M000-001`, revision `A`, serial `0001`, 7 actuators, slaves 0-13) is fixed in `kortex_driver/tools/clear_faults.cpp` and matches the defaults in `kortex.ros2_control.xacro`. The scan fails if the arm on the bus does not match.
-* RCL numbers actuators from 0 in its own messages (`Actuator 1 self-test triggered`), while the fault-bank lines number them from 1 (`actuator 2: a=0x2000`). Both refer to the same actuator.
+* The expected arm identity (`ARM-L3M000-001`, 7 actuators) is fixed in `kortex_driver/tools/clear_faults.cpp` and matches the defaults in `kortex.ros2_control.xacro`. The scan fails if the arm on the bus does not match.
 
 ## License
 

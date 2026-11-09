@@ -180,6 +180,20 @@ def launch_setup(context, *args, **kwargs):
         ],
     )
 
+    # Direct joint velocity and effort control, loaded inactive. Activating one
+    # re-enables the arm in the matching mode; see the README.
+    forward_velocity_controller_spawner = Node(
+        package="controller_manager",
+        executable="spawner",
+        arguments=["forward_velocity_controller", "--inactive", "-c", controller_manager_name],
+    )
+
+    forward_effort_controller_spawner = Node(
+        package="controller_manager",
+        executable="spawner",
+        arguments=["forward_effort_controller", "--inactive", "-c", controller_manager_name],
+    )
+
     # only start the fault controller if we are using hardware; it exposes
     # ~/reset_fault, the deliberate way to clear a latched actuator fault
     fault_controller_spawner = Node(
@@ -197,6 +211,8 @@ def launch_setup(context, *args, **kwargs):
         robot_traj_controller_spawner,
         cartesian_motion_controller_spawner,
         motion_control_handle_spawner,
+        forward_velocity_controller_spawner,
+        forward_effort_controller_spawner,
         fault_controller_spawner,
     ]
 

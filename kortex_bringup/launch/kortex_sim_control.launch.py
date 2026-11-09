@@ -164,6 +164,19 @@ def launch_setup(context, *args, **kwargs):
         ],
     )
 
+    # Direct joint velocity and effort control, loaded inactive.
+    forward_velocity_controller_spawner = Node(
+        package="controller_manager",
+        executable="spawner",
+        arguments=["forward_velocity_controller", "--inactive", "-c", "/controller_manager"],
+    )
+
+    forward_effort_controller_spawner = Node(
+        package="controller_manager",
+        executable="spawner",
+        arguments=["forward_effort_controller", "--inactive", "-c", "/controller_manager"],
+    )
+
     # Gazebo Sim
     gz_sim = IncludeLaunchDescription(
         PythonLaunchDescriptionSource(
@@ -204,6 +217,8 @@ def launch_setup(context, *args, **kwargs):
         robot_traj_controller_spawner,
         cartesian_motion_controller_spawner,
         motion_control_handle_spawner,
+        forward_velocity_controller_spawner,
+        forward_effort_controller_spawner,
     ]
 
 

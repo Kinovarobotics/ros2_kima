@@ -25,9 +25,10 @@
  * kortex_driver::RclRobotDriver (see rcl_robot_driver.hpp) so that Kinova's
  * <rcl/rcl.h> never clashes with ROS 2's identically-named rcl headers.
  *
- * v1 scope: joint position command only (RCL exposes only
- * ArmMode::RealTimeJointPosition); position/velocity/effort exported as state.
- * No gripper (KIMA is arm-only on the EtherCAT bus).
+ * Scope: ArmMode::RealTimeJoint with a position, velocity or effort command per
+ * joint; position/velocity/effort exported as state. The claimed command
+ * interfaces select each joint's mode. No gripper (KIMA is arm-only on the
+ * EtherCAT bus).
  *
  */
 //----------------------------------------------------------------------
@@ -36,6 +37,8 @@
 
 #pragma once
 
+#include <array>
+#include <atomic>
 #include <cstddef>
 #include <cstdint>
 #include <limits>
@@ -87,6 +90,18 @@ public:
   KORTEX_DRIVER_PUBLIC
   CallbackReturn on_deactivate(const rclcpp_lifecycle::State & previous_state) final;
 
+  /** Validate a controller switch and, if a joint's mode changes, stop the arm. May block. */
+  KORTEX_DRIVER_PUBLIC
+  return_type prepare_command_mode_switch(
+    const std::vector<std::string> & start_interfaces,
+    const std::vector<std::string> & stop_interfaces) final;
+
+  /** Queue the mode change validated by prepare. Runs on the real-time loop. */
+  KORTEX_DRIVER_PUBLIC
+  return_type perform_command_mode_switch(
+    const std::vector<std::string> & start_interfaces,
+    const std::vector<std::string> & stop_interfaces) final;
+
   KORTEX_DRIVER_PUBLIC
   return_type read(const rclcpp::Time & time, const rclcpp::Duration & period) final;
 
@@ -94,6 +109,15 @@ public:
   return_type write(const rclcpp::Time & time, const rclcpp::Duration & period) final;
 
 private:
+  // Command interface a controller currently holds on a joint.
+  enum class JointClaim : std::uint8_t
+  {
+    None,
+    Position,
+    Velocity,
+    Effort,
+  };
+
   // The ROS-free RCL wrapper (owns the EtherCAT master + real-time bridge).
   std::unique_ptr<RclRobotDriver> driver_;
 
@@ -106,6 +130,7 @@ private:
   double gravity_x_{0.0};
   double gravity_y_{0.0};
   double gravity_z_{-9.81};
+  bool torque_gravity_compensated_{true};
 
   std::size_t actuator_count_{RclRobotDriver::kMaxJoints};
 
@@ -114,14 +139,27 @@ private:
   std::vector<double> arm_velocities_;
   std::vector<double> arm_efforts_;
 
-  // --- Command interface storage bound in export_command_interfaces (radians) ---
+  // --- Command interface storage bound in export_command_interfaces (rad / rad-s / Nm) ---
   std::vector<double> arm_commands_positions_;
+  std::vector<double> arm_commands_velocities_;
+  std::vector<double> arm_commands_efforts_;
 
   // --- Scratch buffers (degrees) for the read()/write() bridge ---
   std::vector<double> fb_position_deg_;
   std::vector<double> fb_velocity_deg_;
   std::vector<double> fb_torque_nm_;
   std::vector<double> cmd_position_deg_;
+  std::vector<double> cmd_velocity_deg_;
+
+  // --- Joint-mode switching ---
+  // Interfaces the active controllers hold, and the result of the last prepare.
+  std::vector<JointClaim> claims_;
+  std::vector<JointClaim> pending_claims_;
+  std::array<RclRobotDriver::JointMode, RclRobotDriver::kMaxJoints> pending_modes_{};
+  // Modes the driver is running. Atomic because prepare runs off the update loop.
+  std::array<std::atomic<RclRobotDriver::JointMode>, RclRobotDriver::kMaxJoints> applied_modes_{};
+  // True from perform until the arm is back in real-time control; commands are gated meanwhile.
+  std::atomic<bool> mode_switch_pending_{false};
 
   // --- reset_fault interfaces, driven by picknik_reset_fault_controller ---
   // The controller writes ISSUE_CMD to reset_fault/command and polls
@@ -134,6 +172,9 @@ private:
   // Command-guard rejections already reported by read().
   std::uint64_t rejected_logged_{0};
 
+  // Velocity and torque commands limited so far, already reported by read().
+  std::uint64_t limited_logged_{0};
+
   // Number of consecutive ScanNetwork attempts before giving up in on_configure.
   static constexpr int kMaxScanAttempts = 3;
 
@@ -145,6 +186,15 @@ private:
    * the update loop never blocks. Returns false on failure.
    */
   bool enterRealtimeMode();
+
+  /** Resolve "<joint>/<interface>". Returns false for anything that is not a joint command. */
+  bool parseJointInterface(const std::string & key, std::size_t & joint, JointClaim & claim) const;
+
+  /** Copy the driver's current joint modes into applied_modes_. */
+  void syncAppliedModes();
+
+  /** Collect a finished mode change, if any. Runs on the real-time loop. */
+  void pollModeSwitch();
 };
 
 }  // namespace kortex_driver

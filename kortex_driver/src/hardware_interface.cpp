@@ -23,7 +23,9 @@
  */
 //----------------------------------------------------------------------
 
+#include <algorithm>
 #include <array>
+#include <cctype>
 #include <chrono>
 #include <cmath>
 #include <fstream>
@@ -104,17 +106,17 @@ CallbackReturn KortexMultiInterfaceHardware::on_init(const hardware_interface::H
   topology_file_path_ = GetParam(p, "network_topology_file", DefaultTopologyFile());
 
   expected_arm_.part_number = GetParam(p, "arm_part_number", "ARM-L3M000-001");
-  expected_arm_.part_number_revision = GetParam(p, "arm_part_number_revision", "A");
-  expected_arm_.serial_number = GetParam(p, "arm_serial_number", "0001");
+  // xacro renders booleans as True/False.
+  std::string torque_compensation = GetParam(p, "torque_gravity_compensation", "true");
+  std::transform(
+    torque_compensation.begin(), torque_compensation.end(), torque_compensation.begin(),
+    [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+  torque_gravity_compensated_ = torque_compensation != "false";
 
   try
   {
     expected_arm_.nb_actuators =
       static_cast<std::uint32_t>(std::stoul(GetParam(p, "arm_nb_actuators", "7")));
-    expected_arm_.slave_pos_min =
-      static_cast<std::uint16_t>(std::stoul(GetParam(p, "slave_pos_range_min", "0")));
-    expected_arm_.slave_pos_max =
-      static_cast<std::uint16_t>(std::stoul(GetParam(p, "slave_pos_range_max", "13")));
 
     network_thread_cpu_core_ = std::stoi(GetParam(p, "network_thread_cpu_core", "-1"));
     control_thread_cpu_core_ = std::stoi(GetParam(p, "control_thread_cpu_core", "-1"));
@@ -141,23 +143,26 @@ CallbackReturn KortexMultiInterfaceHardware::on_init(const hardware_interface::H
   RCLCPP_INFO(LOGGER, "EtherCAT master library: %s", ethercat_lib_path_.c_str());
   RCLCPP_INFO(LOGGER, "Network topology file:  %s", topology_file_path_.c_str());
   RCLCPP_INFO(
-    LOGGER, "Expected arm: %s rev %s serial %s, %u actuators, slaves [%u, %u]",
-    expected_arm_.part_number.c_str(), expected_arm_.part_number_revision.c_str(),
-    expected_arm_.serial_number.c_str(), expected_arm_.nb_actuators, expected_arm_.slave_pos_min,
-    expected_arm_.slave_pos_max);
+    LOGGER, "Expected arm: %s, %u actuators", expected_arm_.part_number.c_str(),
+    expected_arm_.nb_actuators);
 
-  // --- Validate the ros2_control joint interfaces (position command;
-  //     position/velocity/effort state; no gripper) ---
+  // --- Validate the ros2_control joint interfaces (position/velocity/effort
+  //     command; position/velocity/effort state; no gripper) ---
   for (const hardware_interface::ComponentInfo & joint : info_.joints)
   {
-    if (
-      joint.command_interfaces.size() != 1 ||
-      joint.command_interfaces[0].name != hardware_interface::HW_IF_POSITION)
+    for (const auto & ci : joint.command_interfaces)
     {
-      RCLCPP_FATAL(
-        LOGGER, "Joint '%s' must have exactly one '%s' command interface.", joint.name.c_str(),
-        hardware_interface::HW_IF_POSITION);
-      return CallbackReturn::ERROR;
+      if (
+        ci.name != hardware_interface::HW_IF_POSITION &&
+        ci.name != hardware_interface::HW_IF_VELOCITY &&
+        ci.name != hardware_interface::HW_IF_EFFORT)
+      {
+        RCLCPP_FATAL(
+          LOGGER, "Joint '%s' has unsupported command interface '%s'. Expected %s, %s, or %s.",
+          joint.name.c_str(), ci.name.c_str(), hardware_interface::HW_IF_POSITION,
+          hardware_interface::HW_IF_VELOCITY, hardware_interface::HW_IF_EFFORT);
+        return CallbackReturn::ERROR;
+      }
     }
 
     for (const auto & si : joint.state_interfaces)
@@ -189,10 +194,15 @@ CallbackReturn KortexMultiInterfaceHardware::on_init(const hardware_interface::H
   arm_velocities_.assign(actuator_count_, nan);
   arm_efforts_.assign(actuator_count_, nan);
   arm_commands_positions_.assign(actuator_count_, nan);
+  arm_commands_velocities_.assign(actuator_count_, nan);
+  arm_commands_efforts_.assign(actuator_count_, nan);
   fb_position_deg_.assign(actuator_count_, 0.0);
   fb_velocity_deg_.assign(actuator_count_, 0.0);
   fb_torque_nm_.assign(actuator_count_, 0.0);
   cmd_position_deg_.assign(actuator_count_, nan);
+  cmd_velocity_deg_.assign(actuator_count_, nan);
+  claims_.assign(actuator_count_, JointClaim::None);
+  pending_claims_ = claims_;
 
   RCLCPP_INFO(LOGGER, "KIMA RCL hardware interface initialized");
   return CallbackReturn::SUCCESS;
@@ -203,25 +213,13 @@ CallbackReturn KortexMultiInterfaceHardware::on_configure(
 {
   RCLCPP_INFO(LOGGER, "Configuring KIMA RCL hardware interface");
 
-  driver_ = std::make_unique<RclRobotDriver>();
-
-  std::string err =
-    driver_->init(ethercat_lib_path_, network_thread_cpu_core_, control_thread_cpu_core_);
-  if (!err.empty())
-  {
-    RCLCPP_ERROR(LOGGER, "%s", err.c_str());
-    driver_.reset();
-    return CallbackReturn::ERROR;
-  }
-
-  // Read the network topology file content (ScanNetwork takes content, not a path).
+  // RCL takes the topology content, not a path, in its constructor.
   std::string topology;
   {
     std::ifstream topology_stream{topology_file_path_};
     if (!topology_stream)
     {
       RCLCPP_ERROR(LOGGER, "Cannot open network topology file '%s'", topology_file_path_.c_str());
-      driver_.reset();
       return CallbackReturn::ERROR;
     }
     std::stringstream buffer;
@@ -229,19 +227,31 @@ CallbackReturn KortexMultiInterfaceHardware::on_configure(
     topology = buffer.str();
   }
 
-  // ScanNetwork can report success while the bus-state monitor latches a system
-  // fault microseconds later, on the transition into Standby (a transient
+  driver_ = std::make_unique<RclRobotDriver>();
+
+  std::string err = driver_->init(
+    ethercat_lib_path_, topology, expected_arm_, network_thread_cpu_core_,
+    control_thread_cpu_core_, torque_gravity_compensated_);
+  if (!err.empty())
+  {
+    RCLCPP_ERROR(LOGGER, "%s", err.c_str());
+    driver_.reset();
+    return CallbackReturn::ERROR;
+  }
+
+  // Scan can report success while the bus-state monitor latches a system fault
+  // microseconds later, on the transition into Configuration (a transient
   // PreOp->None blip is enough). Verify the state we actually landed in, and
-  // reset + rescan if it is Fault: ResetNetwork() returns the system to
-  // Initialization, which is the only way back from a system fault.
+  // reset + rescan if it is Fault: Reset() returns the system to Initialization,
+  // which is the only way back from a system fault.
   bool scanned = false;
   for (int attempt = 1; attempt <= kMaxScanAttempts; ++attempt)
   {
-    err = driver_->scan(topology, expected_arm_);
+    err = driver_->scan();
 
-    if (err.empty() && driver_->getSystemState() == RclRobotDriver::SystemState::Standby)
+    if (err.empty() && driver_->getSystemState() == RclRobotDriver::SystemState::Configuration)
     {
-      RCLCPP_INFO(LOGGER, "ScanNetwork succeeded; system is in Standby");
+      RCLCPP_INFO(LOGGER, "Network scan succeeded; system is in Configuration");
       scanned = true;
       break;
     }
@@ -251,7 +261,7 @@ CallbackReturn KortexMultiInterfaceHardware::on_configure(
       const std::string fault = driver_->getSystemFaultDescription();
       RCLCPP_WARN(
         LOGGER,
-        "ScanNetwork returned success but the system is not in Standby (attempt %d/%d).%s%s",
+        "Network scan returned success but the system is not in Configuration (attempt %d/%d).%s%s",
         attempt, kMaxScanAttempts, fault.empty() ? "" : " Latched system fault:\n", fault.c_str());
     }
     else
@@ -276,12 +286,12 @@ CallbackReturn KortexMultiInterfaceHardware::on_configure(
   if (!scanned)
   {
     RCLCPP_ERROR(
-      LOGGER, "Failed to bring the network to Standby after %d attempts.", kMaxScanAttempts);
+      LOGGER, "Failed to bring the network to Configuration after %d attempts.", kMaxScanAttempts);
     driver_.reset();
     return CallbackReturn::ERROR;
   }
 
-  // Standby-only dynamic-model configuration. These are not optional: without
+  // Configuration-only dynamic-model setup. These are not optional: without
   // them the dynamics model is unconfigured, so a failure here is an error.
   err = driver_->setGravity(gravity_x_, gravity_y_, gravity_z_);
   if (!err.empty())
@@ -337,6 +347,10 @@ KortexMultiInterfaceHardware::export_command_interfaces()
   {
     command_interfaces.emplace_back(hardware_interface::CommandInterface(
       info_.joints[i].name, hardware_interface::HW_IF_POSITION, &arm_commands_positions_[i]));
+    command_interfaces.emplace_back(hardware_interface::CommandInterface(
+      info_.joints[i].name, hardware_interface::HW_IF_VELOCITY, &arm_commands_velocities_[i]));
+    command_interfaces.emplace_back(hardware_interface::CommandInterface(
+      info_.joints[i].name, hardware_interface::HW_IF_EFFORT, &arm_commands_efforts_[i]));
   }
   command_interfaces.emplace_back(
     hardware_interface::CommandInterface("reset_fault", "command", &reset_fault_cmd_));
@@ -356,7 +370,14 @@ CallbackReturn KortexMultiInterfaceHardware::on_activate(
     return CallbackReturn::ERROR;
   }
 
-  // Start cyclic exchange (Standby -> Operational).
+  std::fill(claims_.begin(), claims_.end(), JointClaim::None);
+  for (auto & mode : applied_modes_)
+  {
+    mode.store(RclRobotDriver::JointMode::Position);
+  }
+  mode_switch_pending_.store(false);
+
+  // Start cyclic exchange (Configuration -> Operational).
   std::string err = driver_->startCyclic();
   if (!err.empty())
   {
@@ -414,7 +435,7 @@ CallbackReturn KortexMultiInterfaceHardware::on_activate(
 bool KortexMultiInterfaceHardware::enterRealtimeMode()
 {
   // Seed states and the command buffer from the arm's current position so there
-  // is no discontinuity when RealTimeJointPosition engages.
+  // is no discontinuity when RealTimeJoint engages.
   std::string err = driver_->getFeedback(
     fb_position_deg_.data(), fb_velocity_deg_.data(), fb_torque_nm_.data(), actuator_count_);
   if (!err.empty())
@@ -439,6 +460,185 @@ bool KortexMultiInterfaceHardware::enterRealtimeMode()
     return false;
   }
   return true;
+}
+
+bool KortexMultiInterfaceHardware::parseJointInterface(
+  const std::string & key, std::size_t & joint, JointClaim & claim) const
+{
+  for (std::size_t i = 0; i < info_.joints.size() && i < actuator_count_; i++)
+  {
+    const std::string & name = info_.joints[i].name;
+    if (key.size() <= name.size() || key.compare(0, name.size(), name) != 0 || key[name.size()] != '/')
+    {
+      continue;
+    }
+    const std::string interface = key.substr(name.size() + 1);
+    joint = i;
+    if (interface == hardware_interface::HW_IF_POSITION)
+    {
+      claim = JointClaim::Position;
+      return true;
+    }
+    if (interface == hardware_interface::HW_IF_VELOCITY)
+    {
+      claim = JointClaim::Velocity;
+      return true;
+    }
+    if (interface == hardware_interface::HW_IF_EFFORT)
+    {
+      claim = JointClaim::Effort;
+      return true;
+    }
+  }
+  return false;
+}
+
+void KortexMultiInterfaceHardware::syncAppliedModes()
+{
+  std::array<RclRobotDriver::JointMode, RclRobotDriver::kMaxJoints> modes{};
+  driver_->getJointModes(modes.data(), modes.size());
+  for (std::size_t i = 0; i < modes.size(); i++)
+  {
+    applied_modes_[i].store(modes[i]);
+  }
+}
+
+return_type KortexMultiInterfaceHardware::prepare_command_mode_switch(
+  const std::vector<std::string> & start_interfaces,
+  const std::vector<std::string> & stop_interfaces)
+{
+  std::vector<JointClaim> next = claims_;
+  std::size_t joint = 0;
+  JointClaim claim = JointClaim::None;
+
+  for (const std::string & key : stop_interfaces)
+  {
+    if (parseJointInterface(key, joint, claim))
+    {
+      next[joint] = JointClaim::None;
+    }
+  }
+  for (const std::string & key : start_interfaces)
+  {
+    if (!parseJointInterface(key, joint, claim))
+    {
+      continue;
+    }
+    if (next[joint] != JointClaim::None)
+    {
+      RCLCPP_ERROR(
+        LOGGER, "Cannot start '%s': another command interface of the joint stays claimed.",
+        key.c_str());
+      return return_type::ERROR;
+    }
+    next[joint] = claim;
+  }
+
+  // A joint nobody commands holds its position, whatever it was doing before.
+  bool mode_changes = false;
+  for (std::size_t i = 0; i < next.size(); i++)
+  {
+    pending_modes_[i] = next[i] == JointClaim::Velocity ? RclRobotDriver::JointMode::Velocity
+                        : next[i] == JointClaim::Effort ? RclRobotDriver::JointMode::Torque
+                                                        : RclRobotDriver::JointMode::Position;
+    mode_changes = mode_changes || pending_modes_[i] != applied_modes_[i].load();
+  }
+  pending_claims_ = next;
+
+  // Without a mode change nothing touches the arm, so position controllers can
+  // still be exchanged while it is faulted, like before.
+  if (!mode_changes)
+  {
+    return return_type::OK;
+  }
+
+  if (!driver_)
+  {
+    RCLCPP_ERROR(LOGGER, "Cannot change joint modes: RCL not configured.");
+    return return_type::ERROR;
+  }
+  if (
+    mode_switch_pending_.load() || driver_->armFaultLatched() ||
+    driver_->clearArmFaultsResult() == RclRobotDriver::ClearFaultsResult::Pending)
+  {
+    RCLCPP_ERROR(
+      LOGGER,
+      "Cannot change joint modes while the arm is faulted, recovering or already switching.");
+    return return_type::ERROR;
+  }
+
+  // Done here because prepare runs off the update loop and may block. It also
+  // means the arm is at rest before the new controller activates, so a position
+  // controller captures the pose the arm actually stops at.
+  const std::string err = driver_->holdForModeSwitch();
+  if (!err.empty())
+  {
+    RCLCPP_ERROR(LOGGER, "%s", err.c_str());
+    return return_type::ERROR;
+  }
+  return return_type::OK;
+}
+
+return_type KortexMultiInterfaceHardware::perform_command_mode_switch(
+  const std::vector<std::string> & /*start_interfaces*/,
+  const std::vector<std::string> & /*stop_interfaces*/)
+{
+  claims_ = pending_claims_;
+
+  bool mode_changes = false;
+  for (std::size_t i = 0; i < actuator_count_; i++)
+  {
+    mode_changes = mode_changes || pending_modes_[i] != applied_modes_[i].load();
+  }
+  if (!mode_changes)
+  {
+    return return_type::OK;
+  }
+  if (!driver_)
+  {
+    return return_type::ERROR;
+  }
+
+  // The new controller activates right after this. Anything left in the command
+  // interfaces by the previous one must not reach the arm.
+  const double nan = std::numeric_limits<double>::quiet_NaN();
+  std::fill(arm_commands_velocities_.begin(), arm_commands_velocities_.end(), nan);
+  std::fill(arm_commands_efforts_.begin(), arm_commands_efforts_.end(), nan);
+  arm_commands_positions_ = arm_positions_;
+
+  mode_switch_pending_.store(true);
+  driver_->requestModeSwitch(pending_modes_.data(), actuator_count_);
+  return return_type::OK;
+}
+
+void KortexMultiInterfaceHardware::pollModeSwitch()
+{
+  if (!mode_switch_pending_.load())
+  {
+    return;
+  }
+
+  switch (driver_->modeSwitchResult())
+  {
+    case RclRobotDriver::ModeSwitchResult::Success:
+      RCLCPP_INFO(LOGGER, "Joint control modes changed.");
+      break;
+    case RclRobotDriver::ModeSwitchResult::Failure:
+      // Not return_type::ERROR: that would tear down the hardware and with it
+      // ~/reset_fault, the way to recover from an arm that faulted on the switch.
+      RCLCPP_ERROR(
+        LOGGER, "Joint mode change failed, every joint is back in position control: %s",
+        driver_->modeSwitchMessage().c_str());
+      break;
+    case RclRobotDriver::ModeSwitchResult::Idle:
+    case RclRobotDriver::ModeSwitchResult::Pending:
+    default:
+      return;
+  }
+
+  syncAppliedModes();
+  driver_->consumeModeSwitchResult();
+  mode_switch_pending_.store(false);
 }
 
 CallbackReturn KortexMultiInterfaceHardware::on_deactivate(
@@ -500,6 +700,16 @@ return_type KortexMultiInterfaceHardware::read(
     rejected_logged_ = n_rejected;
   }
 
+  const std::uint64_t n_limited = driver_->limitedCommandCount();
+  if (n_limited != limited_logged_)
+  {
+    RCLCPP_WARN_THROTTLE(
+      LOGGER, g_clock, 1000,
+      "Velocity or torque commands are being limited by the arm's limits (%llu cycles so far).",
+      static_cast<unsigned long long>(n_limited));
+    limited_logged_ = n_limited;
+  }
+
   // Published on reset_fault/internal_fault; refreshed from the control callback,
   // so this costs an atomic load rather than a bus query.
   const bool faulted = driver_->armFaultLatched();
@@ -539,6 +749,8 @@ return_type KortexMultiInterfaceHardware::write(
   // Service a pending reset_fault request from the fault controller. Clearing
   // and re-enabling both block, so they run on the driver's worker thread and we
   // only poll here; the controller spins on reset_fault/async_success meanwhile.
+  pollModeSwitch();
+
   bool recovering = false;
   if (!std::isnan(reset_fault_cmd_))
   {
@@ -563,7 +775,18 @@ return_type KortexMultiInterfaceHardware::write(
         for (std::size_t i = 0; i < actuator_count_; i++)
         {
           arm_commands_positions_[i] = arm_positions_[i];
+          arm_commands_velocities_[i] = std::numeric_limits<double>::quiet_NaN();
+          arm_commands_efforts_[i] = std::numeric_limits<double>::quiet_NaN();
+          if (claims_[i] == JointClaim::Velocity || claims_[i] == JointClaim::Effort)
+          {
+            RCLCPP_WARN(
+              LOGGER,
+              "%s is back in position control after the fault. Deactivate and reactivate its "
+              "velocity or effort controller to resume.",
+              info_.joints[i].name.c_str());
+          }
         }
+        syncAppliedModes();
         reset_fault_async_success_ = 1.0;
         reset_fault_cmd_ = std::numeric_limits<double>::quiet_NaN();
         driver_->consumeClearArmFaultsResult();
@@ -598,7 +821,8 @@ return_type KortexMultiInterfaceHardware::write(
   // Commands also stay gated while a recovery is in flight: the arm drops out of
   // Fault as soon as the clear finishes, before the worker has reseeded and
   // re-enabled, and a controller's pre-fault command must not land in between.
-  if (recovering)
+  // The same applies while the arm is being re-enabled for a joint-mode change.
+  if (recovering || mode_switch_pending_.load())
   {
     return return_type::OK;
   }
@@ -609,15 +833,17 @@ return_type KortexMultiInterfaceHardware::write(
     return return_type::OK;
   }
 
-  // Publish the latest position command (rad -> deg) into the driver's lock-free
-  // buffer that the real-time control callback consumes. No bus I/O happens here.
+  // Publish the latest commands (rad -> deg, NaN stays NaN) into the driver's
+  // lock-free buffer that the real-time control callback consumes. No bus I/O
+  // happens here. Each joint only follows the command matching its mode.
   for (std::size_t i = 0; i < actuator_count_; i++)
   {
-    cmd_position_deg_[i] = std::isnan(arm_commands_positions_[i])
-                             ? std::numeric_limits<double>::quiet_NaN()
-                             : KortexMathUtil::toDeg(arm_commands_positions_[i]);
+    cmd_position_deg_[i] = KortexMathUtil::toDeg(arm_commands_positions_[i]);
+    cmd_velocity_deg_[i] = KortexMathUtil::toDeg(arm_commands_velocities_[i]);
   }
-  driver_->setCommand(cmd_position_deg_.data(), actuator_count_);
+  driver_->setCommand(
+    cmd_position_deg_.data(), cmd_velocity_deg_.data(), arm_commands_efforts_.data(),
+    actuator_count_);
 
   return return_type::OK;
 }

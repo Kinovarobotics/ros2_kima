@@ -25,6 +25,10 @@
 #include <cmath>
 #include <condition_variable>
 #include <cstddef>
+#include <cstdint>
+#include <cstdio>
+#include <ctime>
+#include <filesystem>
 #include <limits>
 #include <memory>
 #include <mutex>
@@ -50,6 +54,27 @@ constexpr double kNoCmd = std::numeric_limits<double>::quiet_NaN();
 // toward a joint limit is ramped out over the last degrees before this margin.
 constexpr double kPositionLimitMarginDeg = 2.0;
 constexpr double kPositionLimitGain = 5.0;  // [deg/s per deg of remaining travel]
+
+// Real-time modes apply each cycle's setpoint as is, so a velocity step demands
+// near-infinite acceleration: a 0 -> 80 deg/s step on joints 1, 3, 5 and 7 drew
+// ~33 A on joint 1 alone, and at 86 deg/s the bus voltage sagged to 13.5 V and
+// the EtherCAT link dropped. Velocity commands are therefore slewed at most at
+// these accelerations (Kinova's recommended maxima, joints 1 to 7).
+constexpr std::array<double, 7> kMaxAccelerationDegS2{720.0,  720.0,  1080.0, 1080.0,
+                                                      1440.0, 1440.0, 1440.0};
+constexpr double kCyclePeriodS = 0.001;  // RCL's 1 kHz control cycle
+
+// Torque commands are slewed the same way, so that the full torque range is
+// crossed in no less than this. Only the torque on top of the model's static
+// torque is ramped; the static torque itself follows the pose every cycle.
+constexpr double kTorqueFullScaleRampS = 0.1;
+
+// Safety cap on the torque commanded on top of the static torque, joints 1 to 7
+// (about 10% of each joint's limit). Torque mode has no speed limit and only
+// cuts the push within kPositionLimitMarginDeg of a limit, so larger torques
+// can spin a joint up fast enough to coast through that margin and fault the
+// arm at its position limit. Raise these deliberately, one joint at a time.
+constexpr std::array<double, 7> kMaxTorquePushNm{10.0, 10.0, 7.0, 7.0, 3.5, 3.5, 3.5};
 
 // How long the arm must stay out of Fault after a post-clear re-enable before
 // the recovery counts as successful. Actuator self-test faults on enable have
@@ -102,6 +127,249 @@ RclRobotDriver::JointMode FromRcl(JointModeOfOperation mode)
       return RclRobotDriver::JointMode::Position;
   }
 }
+
+// Per-cycle CSV log of the arm's feedback and of the command sent to RCL, for
+// offline analysis of actuator behaviour. The control callback only copies a
+// snapshot into a preallocated single-producer/single-consumer ring; a separate
+// thread formats and writes it, so file I/O never runs on the real-time thread.
+// Rows are dropped (and counted) if the writer falls behind.
+class CyclicLog
+{
+public:
+  struct Joint
+  {
+    // Feedback reported by the actuator.
+    std::uint8_t fb_mode;
+    double fb_position, fb_velocity, fb_torque, fb_current, fb_voltage, fb_static_torque,
+      fb_following_error;
+    std::uint32_t fault_a, fault_b, fault_c, fault_d;
+    // Command written to RCL this cycle.
+    std::uint8_t cmd_mode;
+    double cmd_position, cmd_velocity, cmd_torque;
+    // User input from ros2_control, before the driver's limiting.
+    double in_position, in_velocity, in_torque;
+  };
+  struct Row
+  {
+    std::int64_t unix_ns;
+    std::uint64_t cycle;
+    std::uint8_t arm_state, arm_mode;
+    std::uint8_t joints;
+    std::array<Joint, RclRobotDriver::kMaxJoints> j;
+  };
+
+  ~CyclicLog() { stop(); }
+
+  // Opens the file and starts the writer. Not real-time safe; call before the
+  // cyclic exchange starts. Returns the file actually opened, or "" on failure.
+  std::string start(const std::string & path, std::size_t joints, std::string & err)
+  {
+    namespace fs = std::filesystem;
+    std::string file = path;
+    std::error_code ec;
+    if (fs::is_directory(path, ec))
+    {
+      char stamp[32];
+      const std::time_t now = std::time(nullptr);
+      std::tm tm{};
+      localtime_r(&now, &tm);
+      std::strftime(stamp, sizeof(stamp), "%Y%m%d_%H%M%S", &tm);
+      file = (fs::path(path) / ("kima_cyclic_" + std::string(stamp) + ".csv")).string();
+    }
+    out_ = std::fopen(file.c_str(), "w");
+    if (!out_)
+    {
+      err = "cannot open cyclic log file '" + file + "'";
+      return {};
+    }
+    std::setvbuf(out_, nullptr, _IOFBF, 1 << 20);
+    const fs::path fp(file);
+    const std::string events = (fp.parent_path() / (fp.stem().string() + "_faults.csv")).string();
+    events_ = std::fopen(events.c_str(), "w");
+    if (events_)
+    {
+      std::fprintf(events_, "unix_ns,cycle,event,details\n");
+      std::fflush(events_);
+    }
+    joints_ = std::min(joints, RclRobotDriver::kMaxJoints);
+    ring_.resize(kRingSize);
+    writeHeader();
+    running_.store(true);
+    writer_ = std::thread([this] { writeLoop(); });
+    file_ = file;
+    enabled_.store(true, std::memory_order_release);
+    return file;
+  }
+
+  void stop()
+  {
+    enabled_.store(false, std::memory_order_release);
+    if (writer_.joinable())
+    {
+      running_.store(false);
+      writer_.join();
+    }
+    if (out_)
+    {
+      std::fclose(out_);
+      out_ = nullptr;
+    }
+    std::lock_guard<std::mutex> lock(events_mutex_);
+    if (events_)
+    {
+      std::fclose(events_);
+      events_ = nullptr;
+    }
+  }
+
+  // Non-real-time side: one row in <log>_faults.csv, flushed at once so it
+  // survives a crash. Line breaks in @p details become " | ".
+  void logEvent(std::uint64_t cycle, const std::string & event, const std::string & details)
+  {
+    std::lock_guard<std::mutex> lock(events_mutex_);
+    if (!events_)
+    {
+      return;
+    }
+    std::string text;
+    for (const char c : details)
+    {
+      if (c == '\n')
+      {
+        text += " | ";
+      }
+      else if (c == '"')
+      {
+        text += "\"\"";
+      }
+      else
+      {
+        text += c;
+      }
+    }
+    const auto unix_ns = std::chrono::duration_cast<std::chrono::nanoseconds>(
+                           std::chrono::system_clock::now().time_since_epoch())
+                           .count();
+    std::fprintf(
+      events_, "%lld,%llu,%s,\"%s\"\n", static_cast<long long>(unix_ns),
+      static_cast<unsigned long long>(cycle), event.c_str(), text.c_str());
+    std::fflush(events_);
+  }
+
+  bool enabled() const noexcept { return enabled_.load(std::memory_order_acquire); }
+  const std::string & file() const noexcept { return file_; }
+  std::uint64_t dropped() const noexcept { return dropped_.load(std::memory_order_relaxed); }
+
+  // Real-time side: returns the slot to fill, or nullptr when the ring is full.
+  Row * beginPush() noexcept
+  {
+    const std::size_t head = head_.load(std::memory_order_relaxed);
+    if (head - tail_.load(std::memory_order_acquire) >= kRingSize)
+    {
+      dropped_.fetch_add(1, std::memory_order_relaxed);
+      return nullptr;
+    }
+    return &ring_[head & (kRingSize - 1)];
+  }
+  void endPush() noexcept
+  {
+    head_.store(head_.load(std::memory_order_relaxed) + 1, std::memory_order_release);
+  }
+
+private:
+  static constexpr std::size_t kRingSize = 1 << 14;  // ~16 s at 1 kHz
+
+  void writeHeader()
+  {
+    std::fprintf(out_, "unix_ns,cycle,arm_state,arm_mode");
+    static const char * kFields[] = {
+      "fb_mode",
+      "fb_position_deg",
+      "fb_velocity_deg_s",
+      "fb_torque_nm",
+      "fb_current_a",
+      "fb_voltage_v",
+      "fb_static_torque_nm",
+      "fb_following_error_deg",
+      "fault_a",
+      "fault_b",
+      "fault_c",
+      "fault_d",
+      "cmd_mode",
+      "cmd_position_deg",
+      "cmd_velocity_deg_s",
+      "cmd_torque_nm",
+      "in_position_deg",
+      "in_velocity_deg_s",
+      "in_torque_nm"};
+    for (std::size_t i = 0; i < joints_; ++i)
+    {
+      for (const char * f : kFields)
+      {
+        std::fprintf(out_, ",j%zu_%s", i + 1, f);
+      }
+    }
+    std::fprintf(out_, "\n");
+  }
+
+  void writeLoop()
+  {
+    for (;;)
+    {
+      const std::size_t head = head_.load(std::memory_order_acquire);
+      std::size_t tail = tail_.load(std::memory_order_relaxed);
+      if (tail == head)
+      {
+        if (!running_.load())
+        {
+          break;
+        }
+        std::fflush(out_);
+        std::this_thread::sleep_for(std::chrono::milliseconds{20});
+        continue;
+      }
+      for (; tail != head; ++tail)
+      {
+        writeRow(ring_[tail & (kRingSize - 1)]);
+        tail_.store(tail + 1, std::memory_order_release);
+      }
+    }
+    std::fflush(out_);
+  }
+
+  void writeRow(const Row & r)
+  {
+    std::fprintf(
+      out_, "%lld,%llu,%u,%u", static_cast<long long>(r.unix_ns),
+      static_cast<unsigned long long>(r.cycle), r.arm_state, r.arm_mode);
+    for (std::size_t i = 0; i < joints_ && i < r.joints; ++i)
+    {
+      const Joint & j = r.j[i];
+      std::fprintf(
+        out_,
+        ",%u,%.4f,%.4f,%.4f,%.4f,%.3f,%.4f,%.4f,0x%x,0x%x,0x%x,0x%x"
+        ",%u,%.4f,%.4f,%.4f,%.4f,%.4f,%.4f",
+        j.fb_mode, j.fb_position, j.fb_velocity, j.fb_torque, j.fb_current, j.fb_voltage,
+        j.fb_static_torque, j.fb_following_error, j.fault_a, j.fault_b, j.fault_c, j.fault_d,
+        j.cmd_mode, j.cmd_position, j.cmd_velocity, j.cmd_torque, j.in_position, j.in_velocity,
+        j.in_torque);
+    }
+    std::fprintf(out_, "\n");
+  }
+
+  std::FILE * out_{nullptr};
+  std::FILE * events_{nullptr};
+  std::mutex events_mutex_;
+  std::string file_;
+  std::size_t joints_{0};
+  std::vector<Row> ring_;
+  std::atomic<std::size_t> head_{0};
+  std::atomic<std::size_t> tail_{0};
+  std::atomic<std::uint64_t> dropped_{0};
+  std::atomic<bool> enabled_{false};
+  std::atomic<bool> running_{false};
+  std::thread writer_;
+};
 }  // namespace
 
 struct RclRobotDriver::Impl
@@ -129,6 +397,10 @@ struct RclRobotDriver::Impl
   std::array<double, kMaxJoints> position_max_deg{};
   std::array<double, kMaxJoints> velocity_limit_deg_s{};
   std::array<double, kMaxJoints> torque_limit_nm{};
+  // False for a joint RCL reports as continuous or with an empty position range:
+  // velocity and torque commands are then not ramped out near position_*_deg.
+  std::array<bool, kMaxJoints> position_limited{};
+  std::string limits_summary;
   std::atomic<std::uint64_t> limited_cmds{0};
 
   // True while the arm is expected to be in RealTimeJoint mode.
@@ -145,9 +417,21 @@ struct RclRobotDriver::Impl
   // on this before trusting feedback (see waitForFeedback()).
   std::atomic<std::uint64_t> control_cycles{0};
 
+  // Optional per-cycle CSV log (see startCyclicLog()).
+  CyclicLog cyclic_log;
+
   // Command guard: last command accepted per joint, and how many were rejected.
   std::array<double, kMaxJoints> last_good_deg{};
   std::atomic<std::uint64_t> rejected_cmds{0};
+
+  // Velocity sent to RCL on the previous cycle, for the acceleration limit.
+  // Control thread only. Zero whenever the joint is not velocity-commanded,
+  // since a mode switch stops the arm first.
+  std::array<double, kMaxJoints> last_velocity_deg_s{};
+  // Same for torque: what was sent on top of the static torque last cycle.
+  std::array<double, kMaxJoints> last_push_nm{};
+  static_assert(kMaxAccelerationDegS2.size() == kMaxJoints);
+  static_assert(kMaxTorquePushNm.size() == kMaxJoints);
   std::array<std::atomic<double>, kMaxJoints> last_rejected_deg;
 
   // Worker for the requests that block in RCL: clearing faults and selecting the
@@ -199,7 +483,14 @@ struct RclRobotDriver::Impl
     }
   }
 
-  ~Impl() { stopWorker(); }
+  ~Impl()
+  {
+    stopWorker();
+    // Stop RCL's threads before the members its control callback touches are
+    // destroyed; the cyclic log's ring in particular is freed below.
+    rcl.reset();
+    cyclic_log.stop();
+  }
 
   void startWorker()
   {
@@ -381,6 +672,19 @@ struct RclRobotDriver::Impl
     }
     clearVelocityAndTorqueCommands();
     setAllJointsToPosition();
+    // A joint left past its position limit (pushed there by hand in torque mode,
+    // or by its own momentum) cannot be enabled in position mode: its setpoint
+    // would be out of limits and RCL faults the arm again at once. It comes back
+    // in torque mode at the model's static torque instead, so it can be moved
+    // back into range by hand, and its position field is clamped into limits.
+    for (std::size_t i = 0; i < kMaxJoints; ++i)
+    {
+      const double pos = feedback.joints[i].position;
+      if (position_limited[i] && (pos > position_max_deg[i] || pos < position_min_deg[i]))
+      {
+        joint_mode[i].store(JointModeOfOperation::Torque, std::memory_order_relaxed);
+      }
+    }
 
     const Result mode = setRealtimeMode();
     if (!mode)
@@ -433,7 +737,12 @@ struct RclRobotDriver::Impl
       // needs the static torque fed forward to carry the arm's weight.
       JointCommand & out = commands[i];
       out.mode = mode;
-      out.position = joint.position;
+      // A joint pushed past its position limit by hand (torque mode) or by its
+      // own momentum would otherwise make RCL fault the arm again on every
+      // re-enable. Outside position mode this field only has to pass that check.
+      out.position = (mode == JointModeOfOperation::Position || !position_limited[i])
+                       ? joint.position
+                       : std::clamp(joint.position, position_min_deg[i], position_max_deg[i]);
       out.velocity = 0.0;
       out.torque = (mode == JointModeOfOperation::Position) ? 0.0 : limitTorque(i, joint.static_torque);
 
@@ -443,6 +752,14 @@ struct RclRobotDriver::Impl
         // when position control engages.
         cmd_deg[i].store(joint.position, std::memory_order_relaxed);
         last_good_deg[i] = joint.position;
+      }
+      if (!commanding || mode != JointModeOfOperation::Velocity)
+      {
+        last_velocity_deg_s[i] = 0.0;
+      }
+      if (!commanding || mode != JointModeOfOperation::Torque)
+      {
+        last_push_nm[i] = 0.0;
       }
       if (!commanding)
       {
@@ -462,6 +779,53 @@ struct RclRobotDriver::Impl
           break;
       }
     }
+
+    if (cyclic_log.enabled())
+    {
+      logCycle(arm, commands);
+    }
+  }
+
+  void logCycle(const ArmCyclic & arm, std::span<const JointCommand> commands) noexcept
+  {
+    CyclicLog::Row * row = cyclic_log.beginPush();
+    if (!row)
+    {
+      return;
+    }
+    row->unix_ns = std::chrono::duration_cast<std::chrono::nanoseconds>(
+                     std::chrono::system_clock::now().time_since_epoch())
+                     .count();
+    row->cycle = control_cycles.load(std::memory_order_relaxed);
+    row->arm_state = static_cast<std::uint8_t>(arm.feedback->status.state);
+    row->arm_mode = static_cast<std::uint8_t>(arm.feedback->status.mode);
+    row->joints = static_cast<std::uint8_t>(std::min(commands.size(), kMaxJoints));
+    for (std::size_t i = 0; i < row->joints; ++i)
+    {
+      const JointFeedback & fb = arm.feedback->joints[i];
+      const JointCommand & cmd = commands[i];
+      CyclicLog::Joint & j = row->j[i];
+      j.fb_mode = static_cast<std::uint8_t>(fb.mode_of_operation);
+      j.fb_position = fb.position;
+      j.fb_velocity = fb.velocity;
+      j.fb_torque = fb.torque;
+      j.fb_current = fb.current;
+      j.fb_voltage = fb.voltage;
+      j.fb_static_torque = fb.static_torque;
+      j.fb_following_error = fb.following_error;
+      j.fault_a = fb.fault_bank_a;
+      j.fault_b = fb.fault_bank_b;
+      j.fault_c = fb.fault_bank_c;
+      j.fault_d = fb.fault_bank_d;
+      j.cmd_mode = static_cast<std::uint8_t>(cmd.mode);
+      j.cmd_position = cmd.position;
+      j.cmd_velocity = cmd.velocity;
+      j.cmd_torque = cmd.torque;
+      j.in_position = cmd_deg[i].load(std::memory_order_relaxed);
+      j.in_velocity = cmd_velocity_deg_s[i].load(std::memory_order_relaxed);
+      j.in_torque = cmd_torque_nm[i].load(std::memory_order_relaxed);
+    }
+    cyclic_log.endPush();
   }
 
   double guardedPosition(std::size_t i, double measured) noexcept
@@ -494,20 +858,41 @@ struct RclRobotDriver::Impl
       return 0.0;
     }
 
-    // Motion toward a position limit is allowed less speed the closer the joint
-    // gets. Motion away from it is never restricted.
-    const double toward_max =
-      std::max(0.0, kPositionLimitGain * (position_max_deg[i] - kPositionLimitMarginDeg - measured));
-    const double toward_min =
-      std::min(0.0, kPositionLimitGain * (position_min_deg[i] + kPositionLimitMarginDeg - measured));
     const double limit = velocity_limit_deg_s[i];
-    const double limited =
-      std::clamp(std::clamp(cmd, toward_min, toward_max), -limit, limit);
-    if (limited != cmd)
+    const double accel = kMaxAccelerationDegS2[i];
+    // Motion toward a position limit is allowed less speed the closer the joint
+    // gets: no more than it can shed at the acceleration limit before the
+    // margin, and the linear ramp over the last degrees. Motion away from it is
+    // never restricted.
+    const auto approach_speed = [&](double remaining_deg) {
+      if (remaining_deg <= 0.0)
+      {
+        return 0.0;
+      }
+      return std::min(
+        kPositionLimitGain * remaining_deg, std::sqrt(2.0 * accel * remaining_deg));
+    };
+    const double toward_max =
+      position_limited[i]
+        ? approach_speed(position_max_deg[i] - kPositionLimitMarginDeg - measured)
+        : limit;
+    const double toward_min =
+      position_limited[i]
+        ? -approach_speed(measured - (position_min_deg[i] + kPositionLimitMarginDeg))
+        : -limit;
+    const double target = std::clamp(std::clamp(cmd, toward_min, toward_max), -limit, limit);
+    if (target != cmd)
     {
       limited_cmds.fetch_add(1, std::memory_order_relaxed);
     }
-    return limited;
+
+    // Slew toward the target at the acceleration limit. This is the normal
+    // response to any command change, so it is not counted as limiting.
+    const double step = accel * kCyclePeriodS;
+    const double prev = last_velocity_deg_s[i];
+    const double out = std::clamp(target, prev - step, prev + step);
+    last_velocity_deg_s[i] = out;
+    return out;
   }
 
   double limitedTorque(std::size_t i, const JointFeedback & joint) noexcept
@@ -515,26 +900,44 @@ struct RclRobotDriver::Impl
     const double cmd = cmd_torque_nm[i].load(std::memory_order_relaxed);
     if (!std::isfinite(cmd))
     {
+      last_push_nm[i] = 0.0;
       return limitTorque(i, joint.static_torque);
     }
 
-    double target = torque_gravity_compensated ? joint.static_torque + cmd : cmd;
+    const double requested = torque_gravity_compensated ? joint.static_torque + cmd : cmd;
+    const double limit = torque_limit_nm[i];
+    // Torque beyond what holds the arm's weight, within the joint's limit and
+    // the safety cap.
+    const double cap = kMaxTorquePushNm[i];
+    const double uncapped_push = std::clamp(requested, -limit, limit) - joint.static_torque;
+    const double target_push = std::clamp(uncapped_push, -cap, cap);
 
-    // Near a position limit only hold the arm's weight or push away from the limit.
-    const double push = target - joint.static_torque;
-    const bool at_max = joint.position >= position_max_deg[i] - kPositionLimitMarginDeg;
-    const bool at_min = joint.position <= position_min_deg[i] + kPositionLimitMarginDeg;
-    if ((at_max && push > 0.0) || (at_min && push < 0.0))
+    // Slew the push toward its target. A fresh torque-mode joint starts from
+    // the static torque, so with or without gravity compensation it eases in.
+    const double step = limit / kTorqueFullScaleRampS * kCyclePeriodS;
+    const double prev = last_push_nm[i];
+    double push = std::clamp(target_push, prev - step, prev + step);
+
+    // Near a position limit only hold the arm's weight or push away from the
+    // limit. This cut is immediate, not ramped: stopping the push toward the
+    // limit takes priority over a smooth current.
+    const bool at_max =
+      position_limited[i] && joint.position >= position_max_deg[i] - kPositionLimitMarginDeg;
+    const bool at_min =
+      position_limited[i] && joint.position <= position_min_deg[i] + kPositionLimitMarginDeg;
+    const bool blocked = (at_max && target_push > 0.0) || (at_min && target_push < 0.0);
+    if (blocked)
     {
-      target = joint.static_torque;
+      push = 0.0;
     }
+    last_push_nm[i] = push;
 
-    const double limited = limitTorque(i, target);
-    if (limited != (torque_gravity_compensated ? joint.static_torque + cmd : cmd))
+    // Only clamping, the safety cap and the limit cut count as limiting, not the ramp.
+    if (blocked || std::fabs(requested) > limit || target_push != uncapped_push)
     {
       limited_cmds.fetch_add(1, std::memory_order_relaxed);
     }
-    return limited;
+    return limitTorque(i, joint.static_torque + push);
   }
 };
 
@@ -615,13 +1018,42 @@ std::string RclRobotDriver::scan()
   {
     return ToError("GetLimits", res);
   }
+  // The joint types say which joints have position limits at all. The geometry
+  // lists every joint of the chain, fixed ones included, so only the moving
+  // joints are matched to the actuators, in chain order.
+  ArmGeometry geometry;
+  const Result geo_res = impl_->rcl->Arm(kArm).Config().GetGeometry(geometry);
+  if (!geo_res)
+  {
+    return ToError("GetGeometry", geo_res);
+  }
+  std::vector<JointType> types;
+  for (const JointGeometry & joint : geometry.joints)
+  {
+    if (joint.type != JointType::Fixed)
+    {
+      types.push_back(joint.type);
+    }
+  }
+
+  std::ostringstream summary;
   for (std::size_t i = 0; i < kMaxJoints; ++i)
   {
+    const JointType type = i < types.size() ? types[i] : JointType::Revolute;
     impl_->position_min_deg[i] = limits.joint_positions[i].minimum;
     impl_->position_max_deg[i] = limits.joint_positions[i].maximum;
     impl_->velocity_limit_deg_s[i] = limits.joint_velocities[i];
     impl_->torque_limit_nm[i] = limits.joint_torques[i];
+    impl_->position_limited[i] =
+      type != JointType::Continuous && impl_->position_min_deg[i] < impl_->position_max_deg[i];
+    summary << "\n  joint_" << i + 1 << ": "
+            << (type == JointType::Continuous ? "continuous" : "revolute") << ", position ["
+            << impl_->position_min_deg[i] << ", " << impl_->position_max_deg[i] << "] deg"
+            << (impl_->position_limited[i] ? "" : " (not limited)") << ", velocity "
+            << impl_->velocity_limit_deg_s[i] << " deg/s, torque " << impl_->torque_limit_nm[i]
+            << " Nm";
   }
+  impl_->limits_summary = summary.str();
   return {};
 }
 
@@ -1044,6 +1476,43 @@ void RclRobotDriver::getJointModes(JointMode * modes, std::size_t n) const
   {
     modes[i] = FromRcl(impl_->joint_mode[i].load(std::memory_order_relaxed));
   }
+}
+
+std::string RclRobotDriver::startCyclicLog(const std::string & path, std::size_t joints)
+{
+  std::string err;
+  const std::string file = impl_->cyclic_log.start(path, joints, err);
+  return file.empty() ? err : std::string{};
+}
+
+std::string RclRobotDriver::cyclicLogFile() const { return impl_->cyclic_log.file(); }
+
+std::uint64_t RclRobotDriver::cyclicLogDropped() const { return impl_->cyclic_log.dropped(); }
+
+void RclRobotDriver::recordFaultEvent(const std::string & event)
+{
+  if (!impl_->cyclic_log.enabled())
+  {
+    return;
+  }
+  std::string details;
+  const std::string system = getSystemFaultDescription();
+  if (!system.empty())
+  {
+    details += "system:\n" + system + "\n";
+  }
+  const std::string arm = getArmFaultDescription();
+  if (!arm.empty())
+  {
+    details += "arm:\n" + arm + "\n";
+  }
+  details += "banks:\n" + getFaultBanks();
+  impl_->cyclic_log.logEvent(impl_->control_cycles.load(std::memory_order_relaxed), event, details);
+}
+
+std::string RclRobotDriver::limitsSummary() const
+{
+  return impl_->limits_summary;
 }
 
 std::uint64_t RclRobotDriver::limitedCommandCount() const

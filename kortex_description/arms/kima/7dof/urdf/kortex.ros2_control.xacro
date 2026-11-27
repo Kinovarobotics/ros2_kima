@@ -30,7 +30,8 @@
     control_thread_cpu_core:=3
     gravity_x:=0.0
     gravity_y:=0.0
-    gravity_z:=-9.81">
+    gravity_z:=-9.81
+    cyclic_log_file:=''">
 
     <ros2_control name="${name}" type="system">
       <hardware>
@@ -79,6 +80,9 @@
           <param name="gravity_x">${gravity_x}</param>
           <param name="gravity_y">${gravity_y}</param>
           <param name="gravity_z">${gravity_z}</param>
+          <!-- File, or directory for a time-stamped file, that receives one CSV row
+               per control cycle (feedback, command sent, user input). Empty: off. -->
+          <param name="cyclic_log_file">${cyclic_log_file}</param>
           <param name="prefix">${prefix}</param>
         </xacro:unless>
       </hardware>

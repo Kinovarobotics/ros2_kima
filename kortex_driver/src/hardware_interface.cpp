@@ -104,6 +104,7 @@ CallbackReturn KortexMultiInterfaceHardware::on_init(const hardware_interface::H
   //     before the launch/xacro are updated) ---
   ethercat_lib_path_ = GetParam(p, "ethercat_lib_path", "/usr/local/lib/libethercat.so");
   topology_file_path_ = GetParam(p, "network_topology_file", DefaultTopologyFile());
+  cyclic_log_file_ = GetParam(p, "cyclic_log_file", "");
 
   expected_arm_.part_number = GetParam(p, "arm_part_number", "ARM-L3M000-001");
   // xacro renders booleans as True/False.
@@ -239,6 +240,18 @@ CallbackReturn KortexMultiInterfaceHardware::on_configure(
     return CallbackReturn::ERROR;
   }
 
+  if (!cyclic_log_file_.empty())
+  {
+    err = driver_->startCyclicLog(cyclic_log_file_, actuator_count_);
+    if (!err.empty())
+    {
+      RCLCPP_ERROR(LOGGER, "%s", err.c_str());
+      driver_.reset();
+      return CallbackReturn::ERROR;
+    }
+    RCLCPP_INFO(LOGGER, "Logging every control cycle to %s", driver_->cyclicLogFile().c_str());
+  }
+
   // Scan can report success while the bus-state monitor latches a system fault
   // microseconds later, on the transition into Configuration (a transient
   // PreOp->None blip is enough). Verify the state we actually landed in, and
@@ -252,6 +265,7 @@ CallbackReturn KortexMultiInterfaceHardware::on_configure(
     if (err.empty() && driver_->getSystemState() == RclRobotDriver::SystemState::Configuration)
     {
       RCLCPP_INFO(LOGGER, "Network scan succeeded; system is in Configuration");
+      RCLCPP_INFO(LOGGER, "Joint limits reported by the arm:%s", driver_->limitsSummary().c_str());
       scanned = true;
       break;
     }
@@ -293,6 +307,9 @@ CallbackReturn KortexMultiInterfaceHardware::on_configure(
 
   // Configuration-only dynamic-model setup. These are not optional: without
   // them the dynamics model is unconfigured, so a failure here is an error.
+  RCLCPP_INFO(
+    LOGGER, "Gravity vector (base frame): [%.3f, %.3f, %.3f] m/s^2", gravity_x_, gravity_y_,
+    gravity_z_);
   err = driver_->setGravity(gravity_x_, gravity_y_, gravity_z_);
   if (!err.empty())
   {
@@ -413,6 +430,7 @@ CallbackReturn KortexMultiInterfaceHardware::on_activate(
     // RCL reports only that an actuator faulted, never why. These banks are the
     // only record of the cause, so log them while the fault is still latched.
     RCLCPP_ERROR(LOGGER, "Actuator fault banks:\n%s", driver_->getFaultBanks().c_str());
+    driver_->recordFaultEvent("arm_fault_at_activation");
     RCLCPP_ERROR(
       LOGGER,
       "Inspect the arm, then clear with: ros2 service call "
@@ -675,6 +693,7 @@ return_type KortexMultiInterfaceHardware::read(
   if (driver_->isSystemFaulted())
   {
     RCLCPP_ERROR_THROTTLE(LOGGER, g_clock, 1000, "System is in fault.");
+    driver_->recordFaultEvent("system_fault");
     return return_type::ERROR;
   }
 
@@ -705,9 +724,19 @@ return_type KortexMultiInterfaceHardware::read(
   {
     RCLCPP_WARN_THROTTLE(
       LOGGER, g_clock, 1000,
-      "Velocity or torque commands are being limited by the arm's limits (%llu cycles so far).",
+      "Velocity or torque commands are being limited by the arm's limits or the torque safety cap "
+      "(%llu cycles so far).",
       static_cast<unsigned long long>(n_limited));
     limited_logged_ = n_limited;
+  }
+
+  const std::uint64_t n_dropped = driver_->cyclicLogDropped();
+  if (n_dropped != dropped_logged_)
+  {
+    RCLCPP_WARN_THROTTLE(
+      LOGGER, g_clock, 1000, "Cyclic log writer fell behind; %llu row(s) dropped so far.",
+      static_cast<unsigned long long>(n_dropped));
+    dropped_logged_ = n_dropped;
   }
 
   // Published on reset_fault/internal_fault; refreshed from the control callback,
@@ -722,6 +751,7 @@ return_type KortexMultiInterfaceHardware::read(
     RCLCPP_ERROR(
       LOGGER, "Arm fault latched.%s%s\nActuator fault banks:\n%s",
       causes.empty() ? "" : " Causes:\n", causes.c_str(), driver_->getFaultBanks().c_str());
+    driver_->recordFaultEvent("arm_fault");
   }
   in_fault_ = faulted ? 1.0 : 0.0;
 
@@ -771,13 +801,25 @@ return_type KortexMultiInterfaceHardware::write(
         // and confirmed the arm stayed enabled. Match the command interface to
         // that position so nothing buffered before the fault is replayed.
         RCLCPP_INFO(LOGGER, "Arm faults cleared; real-time mode re-entered.");
+        driver_->recordFaultEvent("arm_fault_cleared");
         in_fault_ = 0.0;
+        syncAppliedModes();
         for (std::size_t i = 0; i < actuator_count_; i++)
         {
           arm_commands_positions_[i] = arm_positions_[i];
           arm_commands_velocities_[i] = std::numeric_limits<double>::quiet_NaN();
           arm_commands_efforts_[i] = std::numeric_limits<double>::quiet_NaN();
-          if (claims_[i] == JointClaim::Velocity || claims_[i] == JointClaim::Effort)
+          if (applied_modes_[i].load() == RclRobotDriver::JointMode::Torque)
+          {
+            // Only a joint found past its position limit comes back in torque mode.
+            RCLCPP_WARN(
+              LOGGER,
+              "%s is past its position limit, so it was re-enabled in gravity-compensated torque "
+              "mode. Move it back into range by hand, then switch controllers to restore its "
+              "normal mode.",
+              info_.joints[i].name.c_str());
+          }
+          else if (claims_[i] == JointClaim::Velocity || claims_[i] == JointClaim::Effort)
           {
             RCLCPP_WARN(
               LOGGER,
@@ -786,7 +828,6 @@ return_type KortexMultiInterfaceHardware::write(
               info_.joints[i].name.c_str());
           }
         }
-        syncAppliedModes();
         reset_fault_async_success_ = 1.0;
         reset_fault_cmd_ = std::numeric_limits<double>::quiet_NaN();
         driver_->consumeClearArmFaultsResult();
@@ -809,6 +850,7 @@ return_type KortexMultiInterfaceHardware::write(
         RCLCPP_ERROR(
           LOGGER, "Fault recovery failed: %s\nFault banks:\n%s",
           driver_->clearArmFaultsMessage().c_str(), driver_->getFaultBanks().c_str());
+        driver_->recordFaultEvent("arm_fault_recovery_failed: " + driver_->clearArmFaultsMessage());
         reset_fault_async_success_ = 0.0;
         reset_fault_cmd_ = std::numeric_limits<double>::quiet_NaN();
         driver_->consumeClearArmFaultsResult();

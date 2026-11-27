@@ -64,6 +64,9 @@ def launch_setup(context, *args, **kwargs):
             launch_arguments={
                 "robot_ip": LaunchConfiguration("robot_ip"),
                 "use_fake_hardware": LaunchConfiguration("use_fake_hardware"),
+                "gravity_x": LaunchConfiguration("gravity_x"),
+                "gravity_y": LaunchConfiguration("gravity_y"),
+                "gravity_z": LaunchConfiguration("gravity_z"),
                 "launch_rviz": "false",
             }.items(),
         )
@@ -165,5 +168,13 @@ def generate_launch_description():
         DeclareLaunchArgument(
             "launch_rviz", default_value="true", description="Launch RViz with MoveIt?"
         ),
+    ] + [
+        DeclareLaunchArgument(
+            f"gravity_{axis}",
+            default_value=default,
+            description=f"Forwarded to kima.launch.py: gravity vector {axis} component in the arm "
+            "base frame [m/s^2]. The default (0, 0, -9.81) is a vertical mount.",
+        )
+        for axis, default in (("x", "0.0"), ("y", "0.0"), ("z", "-9.81"))
     ]
     return LaunchDescription(declared_arguments + [OpaqueFunction(function=launch_setup)])

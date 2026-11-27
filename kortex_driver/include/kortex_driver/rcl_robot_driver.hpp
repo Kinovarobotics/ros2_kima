@@ -296,9 +296,37 @@ public:
    * @brief Number of velocity or torque commands changed to respect the arm's limits.
    *
    * Counts cycles where a command was clamped to the joint's velocity or torque
-   * limit or reduced near a position limit. Lock-free.
+   * limit or to the torque safety cap, or reduced near a position limit. Lock-free.
    */
   std::uint64_t limitedCommandCount() const;
+
+  /**
+   * @brief Start logging every control cycle to a CSV file.
+   *
+   * Logs each joint's feedback (mode, position, velocity, torque, current,
+   * voltage, static torque, following error, fault banks), the command written
+   * to RCL and the user input before limiting. @p path is a file, or a directory
+   * to create a time-stamped file in. Call before startCyclic(). Returns "" on
+   * success or the error.
+   */
+  std::string startCyclicLog(const std::string & path, std::size_t joints);
+
+  /** File the cyclic log writes to; empty when logging is off. */
+  std::string cyclicLogFile() const;
+
+  /** Rows dropped because the log writer fell behind. */
+  std::uint64_t cyclicLogDropped() const;
+
+  /**
+   * @brief Append a fault event to the cyclic log's companion <log>_faults.csv.
+   *
+   * Records the system and arm fault causes reported by RCL and the actuator
+   * fault banks, with the current cycle number. No-op when logging is off.
+   */
+  void recordFaultEvent(const std::string & event);
+
+  /** One line per joint with the type and limits read from the arm by scan(). */
+  std::string limitsSummary() const;
 
 private:
   struct Impl;

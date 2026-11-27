@@ -79,6 +79,18 @@ def launch_setup(context, *args, **kwargs):
             "fake_sensor_commands:=",
             fake_sensor_commands,
             " ",
+            "gravity_x:=",
+            LaunchConfiguration("gravity_x"),
+            " ",
+            "gravity_y:=",
+            LaunchConfiguration("gravity_y"),
+            " ",
+            "gravity_z:=",
+            LaunchConfiguration("gravity_z"),
+            " ",
+            "cyclic_log_file:=",
+            LaunchConfiguration("cyclic_log_file"),
+            " ",
         ]
     )
     robot_description = {
@@ -337,5 +349,23 @@ def generate_launch_description():
     )
     declared_arguments.append(
         DeclareLaunchArgument("launch_rviz", default_value="true", description="Launch RViz?")
+    )
+    for axis, default in (("x", "0.0"), ("y", "0.0"), ("z", "-9.81")):
+        declared_arguments.append(
+            DeclareLaunchArgument(
+                f"gravity_{axis}",
+                default_value=default,
+                description=f"Gravity vector {axis} component in the arm base frame [m/s^2]. "
+                "The default (0, 0, -9.81) is a vertical mount; set -9.81 on the base axis "
+                "that points up.",
+            )
+        )
+    declared_arguments.append(
+        DeclareLaunchArgument(
+            "cyclic_log_file",
+            default_value="",
+            description="Real arm only: file, or directory for a time-stamped file, that "
+            "receives one CSV row per control cycle. Empty disables the log.",
+        )
     )
     return LaunchDescription(declared_arguments + [OpaqueFunction(function=launch_setup)])

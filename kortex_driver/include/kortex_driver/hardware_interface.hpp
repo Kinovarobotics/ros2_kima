@@ -127,6 +127,8 @@ private:
   RclRobotDriver::ArmIdentity expected_arm_;
   int network_thread_cpu_core_{-1};
   int control_thread_cpu_core_{-1};
+  // Per-cycle CSV log target (file or directory); empty disables it.
+  std::string cyclic_log_file_;
   double gravity_x_{0.0};
   double gravity_y_{0.0};
   double gravity_z_{-9.81};
@@ -174,6 +176,8 @@ private:
 
   // Velocity and torque commands limited so far, already reported by read().
   std::uint64_t limited_logged_{0};
+  // Cyclic log rows dropped so far, already reported by read().
+  std::uint64_t dropped_logged_{0};
 
   // Number of consecutive ScanNetwork attempts before giving up in on_configure.
   static constexpr int kMaxScanAttempts = 3;

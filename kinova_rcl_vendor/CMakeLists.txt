@@ -46,12 +46,12 @@ if(POLICY CMP0135)
   cmake_policy(SET CMP0135 NEW)
 endif()
 
-FetchContent_Declare(
+fetchcontent_declare(
   kinova_rcl
   URL ${KINOVA_RCL_URL}
   URL_HASH SHA256=${KINOVA_RCL_SHA256}
 )
-FetchContent_MakeAvailable(kinova_rcl)
+fetchcontent_makeavailable(kinova_rcl)
 
 # The tarball has no top-level wrapper directory: include/, lib/, docs/, src/
 # and the EULA sit directly in ${kinova_rcl_SOURCE_DIR}.

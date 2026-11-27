@@ -70,7 +70,7 @@ public:
     Idle,        ///< No request has been made since the last one was collected.
     Pending,     ///< A clear sequence is running on the worker thread.
     Success,     ///< Faults cleared, real-time mode re-entered, and the arm stayed enabled.
-    NotFaulted,  ///< RCL refused the request: the arm was not in Fault, so there was nothing to clear.
+    NotFaulted,  ///< RCL refused the request: the arm was not in Fault, nothing to clear.
     Failure,     ///< Faults remained, re-entering real-time mode failed, or the arm faulted again.
   };
 

@@ -22,6 +22,7 @@
 #include <array>
 #include <atomic>
 #include <chrono>
+#include <cinttypes>
 #include <cmath>
 #include <condition_variable>
 #include <cstddef>
@@ -32,20 +33,20 @@
 #include <limits>
 #include <memory>
 #include <mutex>
-#include <span>
+#include <span>  // NOLINT(build/include_order): C++20 header unknown to cpplint
 #include <sstream>
 #include <string>
 #include <thread>
 #include <utility>
 #include <vector>
 
-#include <rcl/rcl.h>
+#include <rcl/rcl.h>  // NOLINT(build/include_order): RCL's public C++ header
 
 namespace kortex_driver
 {
 namespace
 {
-using namespace rcl::api;
+using namespace rcl::api;  // NOLINT(build/namespaces): RCL API types throughout this file
 
 constexpr ArmId kArm = ArmId::Arm1;
 constexpr double kNoCmd = std::numeric_limits<double>::quiet_NaN();
@@ -251,8 +252,8 @@ public:
                            std::chrono::system_clock::now().time_since_epoch())
                            .count();
     std::fprintf(
-      events_, "%lld,%llu,%s,\"%s\"\n", static_cast<long long>(unix_ns),
-      static_cast<unsigned long long>(cycle), event.c_str(), text.c_str());
+      events_, "%" PRId64 ",%" PRIu64 ",%s,\"%s\"\n", static_cast<std::int64_t>(unix_ns),
+      static_cast<std::uint64_t>(cycle), event.c_str(), text.c_str());
     std::fflush(events_);
   }
 
@@ -340,8 +341,8 @@ private:
   void writeRow(const Row & r)
   {
     std::fprintf(
-      out_, "%lld,%llu,%u,%u", static_cast<long long>(r.unix_ns),
-      static_cast<unsigned long long>(r.cycle), r.arm_state, r.arm_mode);
+      out_, "%" PRId64 ",%" PRIu64 ",%u,%u", static_cast<std::int64_t>(r.unix_ns),
+      static_cast<std::uint64_t>(r.cycle), r.arm_state, r.arm_mode);
     for (std::size_t i = 0; i < joints_ && i < r.joints; ++i)
     {
       const Joint & j = r.j[i];
@@ -744,7 +745,8 @@ struct RclRobotDriver::Impl
                        ? joint.position
                        : std::clamp(joint.position, position_min_deg[i], position_max_deg[i]);
       out.velocity = 0.0;
-      out.torque = (mode == JointModeOfOperation::Position) ? 0.0 : limitTorque(i, joint.static_torque);
+      out.torque =
+        (mode == JointModeOfOperation::Position) ? 0.0 : limitTorque(i, joint.static_torque);
 
       if (!commanding || mode != JointModeOfOperation::Position)
       {
@@ -864,18 +866,17 @@ struct RclRobotDriver::Impl
     // gets: no more than it can shed at the acceleration limit before the
     // margin, and the linear ramp over the last degrees. Motion away from it is
     // never restricted.
-    const auto approach_speed = [&](double remaining_deg) {
+    const auto approach_speed = [&](double remaining_deg)
+    {
       if (remaining_deg <= 0.0)
       {
         return 0.0;
       }
-      return std::min(
-        kPositionLimitGain * remaining_deg, std::sqrt(2.0 * accel * remaining_deg));
+      return std::min(kPositionLimitGain * remaining_deg, std::sqrt(2.0 * accel * remaining_deg));
     };
     const double toward_max =
-      position_limited[i]
-        ? approach_speed(position_max_deg[i] - kPositionLimitMarginDeg - measured)
-        : limit;
+      position_limited[i] ? approach_speed(position_max_deg[i] - kPositionLimitMarginDeg - measured)
+                          : limit;
     const double toward_min =
       position_limited[i]
         ? -approach_speed(measured - (position_min_deg[i] + kPositionLimitMarginDeg))
@@ -1510,10 +1511,7 @@ void RclRobotDriver::recordFaultEvent(const std::string & event)
   impl_->cyclic_log.logEvent(impl_->control_cycles.load(std::memory_order_relaxed), event, details);
 }
 
-std::string RclRobotDriver::limitsSummary() const
-{
-  return impl_->limits_summary;
-}
+std::string RclRobotDriver::limitsSummary() const { return impl_->limits_summary; }
 
 std::uint64_t RclRobotDriver::limitedCommandCount() const
 {

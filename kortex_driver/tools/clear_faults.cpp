@@ -37,8 +37,8 @@
 #include <thread>
 #include <vector>
 
-using namespace rcl;
-using namespace rcl::api;
+using namespace rcl;       // NOLINT(build/namespaces): small standalone tool
+using namespace rcl::api;  // NOLINT(build/namespaces)
 
 namespace
 {

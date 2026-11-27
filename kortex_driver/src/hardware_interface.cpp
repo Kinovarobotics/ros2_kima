@@ -27,6 +27,7 @@
 #include <array>
 #include <cctype>
 #include <chrono>
+#include <cinttypes>
 #include <cmath>
 #include <fstream>
 #include <limits>
@@ -231,8 +232,8 @@ CallbackReturn KortexMultiInterfaceHardware::on_configure(
   driver_ = std::make_unique<RclRobotDriver>();
 
   std::string err = driver_->init(
-    ethercat_lib_path_, topology, expected_arm_, network_thread_cpu_core_,
-    control_thread_cpu_core_, torque_gravity_compensated_);
+    ethercat_lib_path_, topology, expected_arm_, network_thread_cpu_core_, control_thread_cpu_core_,
+    torque_gravity_compensated_);
   if (!err.empty())
   {
     RCLCPP_ERROR(LOGGER, "%s", err.c_str());
@@ -486,7 +487,9 @@ bool KortexMultiInterfaceHardware::parseJointInterface(
   for (std::size_t i = 0; i < info_.joints.size() && i < actuator_count_; i++)
   {
     const std::string & name = info_.joints[i].name;
-    if (key.size() <= name.size() || key.compare(0, name.size(), name) != 0 || key[name.size()] != '/')
+    if (
+      key.size() <= name.size() || key.compare(0, name.size(), name) != 0 ||
+      key[name.size()] != '/')
     {
       continue;
     }
@@ -712,10 +715,11 @@ return_type KortexMultiInterfaceHardware::read(
   {
     RCLCPP_ERROR_THROTTLE(
       LOGGER, g_clock, 1000,
-      "Command guard rejected %llu implausible position command(s) so far; last rejected "
+      "Command guard rejected %" PRIu64
+      " implausible position command(s) so far; last rejected "
       "[deg]: %g %g %g %g %g %g %g",
-      static_cast<unsigned long long>(n_rejected), rejected[0], rejected[1], rejected[2],
-      rejected[3], rejected[4], rejected[5], rejected[6]);
+      n_rejected, rejected[0], rejected[1], rejected[2], rejected[3], rejected[4], rejected[5],
+      rejected[6]);
     rejected_logged_ = n_rejected;
   }
 
@@ -725,8 +729,8 @@ return_type KortexMultiInterfaceHardware::read(
     RCLCPP_WARN_THROTTLE(
       LOGGER, g_clock, 1000,
       "Velocity or torque commands are being limited by the arm's limits or the torque safety cap "
-      "(%llu cycles so far).",
-      static_cast<unsigned long long>(n_limited));
+      "(%" PRIu64 " cycles so far).",
+      n_limited);
     limited_logged_ = n_limited;
   }
 
@@ -734,8 +738,8 @@ return_type KortexMultiInterfaceHardware::read(
   if (n_dropped != dropped_logged_)
   {
     RCLCPP_WARN_THROTTLE(
-      LOGGER, g_clock, 1000, "Cyclic log writer fell behind; %llu row(s) dropped so far.",
-      static_cast<unsigned long long>(n_dropped));
+      LOGGER, g_clock, 1000, "Cyclic log writer fell behind; %" PRIu64 " row(s) dropped so far.",
+      n_dropped);
     dropped_logged_ = n_dropped;
   }
 

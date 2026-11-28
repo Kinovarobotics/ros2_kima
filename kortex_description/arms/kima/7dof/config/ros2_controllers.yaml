@@ -17,6 +17,40 @@
     motion_control_handle:
       type: cartesian_controller_handles/MotionControlHandle
 
+    forward_velocity_controller:
+      type: forward_command_controller/ForwardCommandController
+
+    forward_effort_controller:
+      type: forward_command_controller/ForwardCommandController
+
+/forward_velocity_controller:
+  ros__parameters:
+    # std_msgs/Float64MultiArray on ~/commands, in rad/s, one value per joint.
+    # The last command stays applied until a new one arrives.
+    joints:
+      - joint_1
+      - joint_2
+      - joint_3
+      - joint_4
+      - joint_5
+      - joint_6
+      - joint_7
+    interface_name: velocity
+
+/forward_effort_controller:
+  ros__parameters:
+    # std_msgs/Float64MultiArray on ~/commands, in Nm, one value per joint.
+    # See torque_gravity_compensation in kortex.ros2_control.xacro for what 0 Nm means.
+    joints:
+      - joint_1
+      - joint_2
+      - joint_3
+      - joint_4
+      - joint_5
+      - joint_6
+      - joint_7
+    interface_name: effort
+
 /joint_trajectory_controller:
   ros__parameters:
     joints:
@@ -44,7 +78,7 @@
   ros__parameters:
     # Tracks a target pose for tool_frame, published as geometry_msgs/PoseStamped on
     # ~/target_frame (the motion_control_handle publishes there from RViz).
-    # FZI cartesian_controllers; the KIMA driver only exports position commands.
+    # FZI cartesian_controllers, driving the joints in position.
     robot_base_link: base_link
     end_effector_link: tool_frame
     joints:

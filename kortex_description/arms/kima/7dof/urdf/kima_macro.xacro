@@ -6,6 +6,15 @@
   <xacro:property name="last_arm_link" value="end_effector_link"/>
   <xacro:property name="PI" value="3.1415926535897931"/>
 
+  <!-- Gravity vector in the arm base frame [m/s^2], used by RCL's dynamic model
+       (torque/velocity modes rely on it). The default is a vertical mount; override
+       with the gravity_x/y/z launch arguments for any other mounting. -->
+  <xacro:arg name="gravity_x" default="0.0"/>
+  <xacro:arg name="gravity_y" default="0.0"/>
+  <xacro:arg name="gravity_z" default="-9.81"/>
+  <!-- Per-cycle CSV log of the real arm (file or directory); empty disables it. -->
+  <xacro:arg name="cyclic_log_file" default=""/>
+
   <xacro:macro name="load_arm" params="
     parent
     dof
@@ -50,7 +59,11 @@
       port="${port}"
       port_realtime="${port_realtime}"
       session_inactivity_timeout_ms="${session_inactivity_timeout_ms}"
-      connection_inactivity_timeout_ms="${connection_inactivity_timeout_ms}"/>
+      connection_inactivity_timeout_ms="${connection_inactivity_timeout_ms}"
+      gravity_x="$(arg gravity_x)"
+      gravity_y="$(arg gravity_y)"
+      gravity_z="$(arg gravity_z)"
+      cyclic_log_file="$(arg cyclic_log_file)"/>
 
     <!-- Fixed joint attaching arm base to parent link -->
     <joint name="${prefix}base_joint" type="fixed">

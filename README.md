@@ -109,6 +109,22 @@ Arguments:
 
 * `launch_rviz`: Start RViz to visualize the robot. Default value is `true`.
 
+* `gravity_x`, `gravity_y`, `gravity_z`: Gravity vector in the arm's base frame, in m/s². Default values are `0.0`, `0.0` and `-9.81`, which is a **vertical mount** (base `z` axis pointing up). See [Mounting and gravity](#mounting-and-gravity).
+* `cyclic_log_file`: Real arm only. Path to a file, or to an existing directory for a time-stamped `kima_cyclic_<date>_<time>.csv`, that receives one CSV row per control cycle: for each joint, the feedback (mode, position, velocity, torque, motor current, bus voltage, static torque, following error, fault banks), the command sent to RCL and the user input before the driver's limits. Arm and system faults, with RCL's causes and the fault banks, go to `<name>_faults.csv` next to it. Empty by default, which disables both. At 1 kHz the log grows by about 0.8 MB per second (about 3 GB per hour), so enable it only for a test.
+
+#### Mounting and gravity
+
+The driver gives the gravity vector to RCL's dynamic model, which computes the static torque each joint needs to hold the arm. **Joint velocity and effort (torque) control rely on it**: with `torque_gravity_compensation` enabled, a 0 Nm effort command is meant to float the arm. If the vector does not match how the arm is mounted, the arm sags or rises as soon as those modes are activated.
+
+The default assumes a vertical mount. For any other mounting, put `-9.81` on the base axis that points up (or `+9.81` on an axis that points down), and `0.0` on the others. For example, an arm mounted horizontally with its base `+x` axis pointing up:
+
+```bash
+ros2 launch kortex_bringup kima.launch.py robot_ip:=192.168.1.10 \
+  gravity_x:=-9.81 gravity_y:=0.0 gravity_z:=0.0
+```
+
+To find which base axis points up, show the `base_link` axes in RViz (TF display) and compare with the real arm: `x` is red, `y` is green and `z` is blue. The driver logs the vector it applies at startup (`Gravity vector (base frame): [...]`), so check that line before using velocity or effort control.
+
 ### Simulation (Gazebo)
 
 To run the arm in Gazebo Sim (Harmonic) instead of on the hardware:
@@ -153,6 +169,8 @@ Arguments:
 * `launch_rviz`: Start RViz with the MotionPlanning panel. Default value is `true`.
 
 * `robot_ip`: Forwarded to `kima.launch.py`. The EtherCAT driver does not use it. Default value is `0.0.0.0`.
+
+* `gravity_x`, `gravity_y`, `gravity_z`: Forwarded to `kima.launch.py`. Default values are `0.0`, `0.0` and `-9.81` (vertical mount). See [Mounting and gravity](#mounting-and-gravity).
 
 The planning group is `manipulator` (`base_link` to `tool_frame`), with a `home` named state (all joints at 0). The OMPL (default) and Pilz (`PTP`, `LIN`, `CIRC`) planners are available. Motions execute through `joint_trajectory_controller`.
 
@@ -244,6 +262,34 @@ Notes:
 * Activate it away from the straight-up zero pose, which is a kinematic singularity. Move the arm into a bent pose with the trajectory controller first.
 * The orientation in the target is followed too: a quaternion different from the current one rotates the tool.
 
+### Joint velocity and effort control
+
+`forward_velocity_controller` and `forward_effort_controller` send one velocity (rad/s) or torque (Nm) per joint, straight to the actuators. Both are loaded inactive. They need actuator firmware 3.3 or later.
+
+```bash
+ros2 control switch_controllers \
+  --activate forward_velocity_controller \
+  --deactivate joint_trajectory_controller
+
+ros2 topic pub --once /forward_velocity_controller/commands std_msgs/msg/Float64MultiArray \
+  "{data: [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.05]}"
+```
+
+Use `/forward_effort_controller/commands` the same way for torque. Stop with a zero command, then switch back to `joint_trajectory_controller`.
+
+Notes:
+
+* The last command stays applied until a new one arrives, so a publisher that dies leaves the arm moving. Publish continuously from anything that is not supervised.
+* Changing a joint's mode stops the arm and re-enables it, so the switch takes a moment and motion is interrupted. The switch is refused while the arm is faulted. Exchanging controllers that use the same interface does not interrupt anything.
+* Until the first command arrives, a velocity joint stays still and an effort joint holds its own weight.
+* After `~/reset_fault` every joint returns to position control and holds its position, except a joint found past its position limit (see [A joint past its position limit](#a-joint-past-its-position-limit)). Deactivate and reactivate the velocity or effort controller to resume.
+* Velocity and torque commands are limited to the arm's own limits, and motion toward a position limit is ramped out over the last degrees. A warning is logged while this happens.
+* Real arm only: velocity commands are ramped at most at 720, 720, 1080, 1080, 1440, 1440 and 1440 deg/s² (joints 1 to 7), so a step command becomes a ramp: 0 to 80 deg/s on joint 1 takes about 0.11 s. Real-time modes apply each setpoint as is, and unramped steps draw large currents (about 33 A on joint 1 for an 80 deg/s step) that can sag the bus voltage until the EtherCAT link drops.
+* Real arm only: torque commands are ramped too, so that a joint's full torque range takes at least 0.1 s (1070, 1070, 700, 700, 360, 360 and 360 Nm/s on joints 1 to 7). Only the torque on top of the model's static torque is ramped, so gravity compensation still follows the pose every cycle, and a joint entering torque mode eases in from holding its weight. Near a position limit the push toward the limit is still cut at once.
+* Real arm only: **torque commands are capped for safety** at 10, 10, 7, 7, 3.5, 3.5 and 3.5 Nm on joints 1 to 7 (about 10% of each joint's limit), on top of the static torque that holds the arm's weight. Torque mode has no speed limit, and near a position limit it only cuts the push toward the limit, without braking. A larger torque can spin a joint up fast enough to coast through the last 2° and fault the arm at its position limit. A larger command is clipped to the cap, and the limiting warning is logged. To change the caps, edit `kMaxTorquePushNm` in `kortex_driver/src/rcl_robot_driver.cpp` and rebuild; raise them one joint at a time, away from the limits, with the cyclic log enabled.
+* With the default `torque_gravity_compensation:=true` an effort command is added to the arm's model-estimated static torque, so 0 Nm floats the arm. Set it to `false` in `kortex.ros2_control.xacro` for a controller that computes the total joint torque itself. Gazebo always applies the total torque, so 0 Nm lets the simulated arm fall.
+* Effort commands have no tool model unless one is configured: a payload makes the arm sag.
+
 ## Clearing arm faults
 
 Actuator faults stay latched in the actuators across restarts: stopping the launch does not clear them. There are two ways to clear them.
@@ -257,6 +303,43 @@ ros2 service call /fault_controller/reset_fault example_interfaces/srv/Trigger
 ```
 
 On success, the driver re-enters real-time mode from the arm's current position. When a fault latches, the driver logs its causes and the per-actuator fault banks (`Arm fault latched. ... Actuator fault banks:`).
+
+### A joint past its position limit
+
+In torque mode a joint can be pushed past its position limit by hand, or carried past it by its own momentum. The driver only cancels commanded torque toward a limit, so this is possible. The actuator then faults and engages its brakes. A joint past its limit cannot be re-enabled in position mode, because RCL rejects the setpoint and faults the arm again (`Joint position command on actuator N is out of limits`). So on `~/reset_fault` the driver re-enables such a joint in gravity-compensated torque mode instead, and every other joint in position mode, holding its pose. This also covers a joint that was already out of range when the launch started.
+
+To recover:
+
+1. While the arm is still faulted, zero the effort command. The effort controller keeps sending its last command after the reset, and a torque toward the limit would push the joint back once it is in range:
+
+   ```bash
+   ros2 topic pub --once /forward_effort_controller/commands std_msgs/msg/Float64MultiArray \
+     "{data: [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]}"
+   ```
+
+2. Clear the fault, with a hand on the E-stop within reach:
+
+   ```bash
+   ros2 service call /fault_controller/reset_fault example_interfaces/srv/Trigger
+   ```
+
+   The driver names the joint: `joint_N is past its position limit, so it was re-enabled in gravity-compensated torque mode.`
+
+3. Move that joint by hand back into its range, more than 2° inside the limit. It holds its own weight, so no command is needed.
+
+4. Switch back to the position controller to give the joint its normal mode back:
+
+   ```bash
+   ros2 control switch_controllers \
+     --deactivate forward_effort_controller \
+     --activate joint_trajectory_controller
+   ```
+
+Notes:
+
+* No second `~/reset_fault` is needed: once the joint is back in range, nothing is faulted. Call it again only if the arm faults while you move the joint.
+* Stay out of position mode until the joint is back in range. Switching to a position controller with a joint out of range faults the arm again, even if it is only a fraction of a degree past the limit. Check with `ros2 topic echo --once /joint_states --field position` first.
+* The joint limits read from the arm are logged at startup (`Joint limits reported by the arm:`).
 
 ### When the launch cannot start: RCL directly
 
@@ -279,8 +362,7 @@ Notes:
 * Only one program can hold the EtherCAT master at a time, so `ros2_control_node` must not be running.
 * The tool never enables the arm: it stays in `Idle` with its brakes engaged.
 * RCL sometimes reports `Fault clear incomplete: N actuator(s) still in fault` even though every fault bank already reads zero. The tool, like `~/reset_fault`, retries the clear up to 3 times in that case. If it still ends in `Fault`, run it again.
-* The expected arm identity (`ARM-L3M000-001`, revision `A`, serial `0001`, 7 actuators, slaves 0-13) is fixed in `kortex_driver/tools/clear_faults.cpp` and matches the defaults in `kortex.ros2_control.xacro`. The scan fails if the arm on the bus does not match.
-* RCL numbers actuators from 0 in its own messages (`Actuator 1 self-test triggered`), while the fault-bank lines number them from 1 (`actuator 2: a=0x2000`). Both refer to the same actuator.
+* The expected arm identity (`ARM-L3M000-001`, 7 actuators) is fixed in `kortex_driver/tools/clear_faults.cpp` and matches the defaults in `kortex.ros2_control.xacro`. The scan fails if the arm on the bus does not match.
 
 ## License
 

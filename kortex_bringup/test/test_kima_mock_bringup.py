@@ -167,6 +167,8 @@ class TestKimaMockBringup(unittest.TestCase):
                 "joint_trajectory_controller": "active",
                 "cartesian_motion_controller": "inactive",
                 "motion_control_handle": "inactive",
+                "forward_velocity_controller": "inactive",
+                "forward_effort_controller": "inactive",
             }
         )
         # fault_controller needs the real driver's reset_fault interfaces and is
@@ -206,6 +208,25 @@ class TestKimaMockBringup(unittest.TestCase):
             self.assertAlmostEqual(end.translation.z - start.translation.z, 0.03, delta=0.002)
         finally:
             self.switch(["joint_trajectory_controller"], ["cartesian_motion_controller"])
+
+    def test_velocity_and_effort_controllers(self):
+        # Each one claims a different command interface of every joint, and takes
+        # over from the trajectory controller and hands back to it cleanly.
+        self.wait_for_controllers({"joint_trajectory_controller": "active"})
+        for controller in ("forward_velocity_controller", "forward_effort_controller"):
+            self.wait_for_controllers({controller: "inactive"})
+            self.switch([controller], ["joint_trajectory_controller"])
+            try:
+                self.wait_for_controllers(
+                    {controller: "active", "joint_trajectory_controller": "inactive"}
+                )
+                self.assertTrue(
+                    self.spin_until(
+                        lambda: self.node.count_subscribers(f"/{controller}/commands") > 0, 10.0
+                    )
+                )
+            finally:
+                self.switch(["joint_trajectory_controller"], [controller])
 
     def test_4_motion_handle_wiring(self):
         # The handle's output is remapped straight onto the controller's input.

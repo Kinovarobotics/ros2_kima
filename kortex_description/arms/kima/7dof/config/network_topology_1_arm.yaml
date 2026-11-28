@@ -5,7 +5,7 @@ defines:
   act_a01_main:
     vendor_id: 0x000022CD
     product_id: 0x00000101
-    revision: 0x00000004
+    revision: 0x00000005
     rpdo:
       - index: 0x1605
         channels:
@@ -52,7 +52,7 @@ defines:
   act_a01_safety:
     vendor_id: 0x000022CD
     product_id: 0x00000102
-    revision: 0x00000004
+    revision: 0x00000005
     rpdo:
       - index: 0x1600
         channels:
